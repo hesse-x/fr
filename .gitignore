@@ -1,0 +1,6 @@
+__pycache__
+*.swn
+*.swo
+*.swp
+*.msh
+log
