@@ -1,5 +1,6 @@
 import mesh
 import elem_map
+import utils
 import numpy as np
 import torch
 from scipy.special import roots_legendre
@@ -22,6 +23,8 @@ CFL = 0.1
 
 root_nodes, w = roots_legendre(order + 1)
 
+correction = utils.CorrectionFlux(order)
+
 
 def init_field(field: mesh.ElementGroup, prop: mesh.ElementGroupProperty,
                mesh_read: mesh.Mesh):
@@ -34,12 +37,6 @@ def init_field(field: mesh.ElementGroup, prop: mesh.ElementGroupProperty,
         k = (xr - xl) / 2
         b = (xl + xr) / 2
         field.u[idx, :] = torch.exp(-56 * (k * root_nodes + b)**2)
-
-
-def interp_interface(value: torch.Tensor, prop: mesh.ElementGroupProperty):
-    A = prop.interp_inteface_matrix
-    f = torch.matmul(value, A)
-    return f
 
 
 def compute_flux(u):
@@ -69,27 +66,6 @@ def burgers_roe(u: torch.Tensor, flux: torch.Tensor):
     f_L = flux[:, 0, 0]
     f_R = flux[:, 0, 1]
     return (f_L + f_R) / 2 - torch.abs(u_R + u_L) * (u_R - u_L) / 4
-
-
-def init_g(order):
-    _root_nodes = np.append(root_nodes, 1)
-    k = 1 / np.prod(-1 - _root_nodes)
-    n = len(_root_nodes)
-    diff = _root_nodes[:, np.newaxis] - _root_nodes
-    np.fill_diagonal(diff, 1)
-    derivatives = k * np.prod(diff, axis=1)
-    return torch.tensor(derivatives[:-1])
-
-
-_gl_derivatives = init_g(order)
-
-
-def compute_gr_deri(df_r):
-    return -df_r[:, None] * _gl_derivatives[None, :]
-
-
-def compute_gl_deri(df_l):
-    return df_l[:, None] * _gl_derivatives[None, :]
 
 
 def compute_dt(u: torch.Tensor, dx: torch.Tensor):
@@ -135,12 +111,12 @@ t = 0
 for i in range(0, stop_step):
     dt = compute_dt(field.u, dx_elem)
     # 插值边界的u
-    interped_u = interp_interface(field.u, elem_prop)
+    interped_u = utils.interp_interface(field.u, elem_prop)
     elem_map.scatter_value_to_interface(interped_u, fluxs.u, elem_prop)
 
     # 计算求解点f
     flux_p = compute_flux(field.u)
-    interped_flux = interp_interface(flux_p, elem_prop)
+    interped_flux = utils.interp_interface(flux_p, elem_prop)
     elem_map.scatter_value_to_interface(interped_flux, fluxs.flux, elem_prop)
 
     # 计算边界的u/f
@@ -153,8 +129,8 @@ for i in range(0, stop_step):
     elem_bound_flux_diff = elem_map.gather_interface_vaue(
         fluxs.restruct_flux[:, :, None] - fluxs.flux, elem_prop, dim_u)
     field.flux_deri = torch.matmul(
-        flux_p, elem_prop.deri_matrix) + compute_gl_deri(
-            elem_bound_flux_diff[:, :, 0]) + compute_gr_deri(
+        flux_p, elem_prop.deri_matrix) + correction.compute_gl_deri(
+            elem_bound_flux_diff[:, :, 0]) + correction.compute_gr_deri(
                 elem_bound_flux_diff[:, :, 1])
 
     # 推进u
