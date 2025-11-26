@@ -10,7 +10,7 @@ def interp_interface(value: torch.Tensor, prop: mesh.ElementGroupProperty):
     return f
 
 
-class CorrectionFlux:
+class SmoothCorrectionFlux:
     @staticmethod
     def init_g(order):
         root_nodes, _ = roots_legendre(order + 1)
@@ -23,7 +23,7 @@ class CorrectionFlux:
         return torch.tensor(derivatives[:-1])
 
     def __init__(self, order: int):
-        self._gl_derivatives = CorrectionFlux.init_g(order)
+        self._gl_derivatives = SmoothCorrectionFlux.init_g(order)
 
     def compute_gr_deri(self, df_r):
         return -df_r[:, :, None] * self._gl_derivatives[None, None, :]

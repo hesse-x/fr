@@ -17,7 +17,7 @@ skip = 1  # 每隔多少步保存一次结果
 CFL = 0.1
 dim_u = 2
 
-correction = utils.CorrectionFlux(order)
+correction = utils.SmoothCorrectionFlux(order)
 
 
 def init_field(field: mesh.ElementGroup, prop: mesh.ElementGroupProperty,

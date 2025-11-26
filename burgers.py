@@ -23,7 +23,7 @@ CFL = 0.1
 
 root_nodes, w = roots_legendre(order + 1)
 
-correction = utils.CorrectionFlux(order)
+correction = utils.SmoothCorrectionFlux(order)
 
 
 def init_field(field: mesh.ElementGroup, prop: mesh.ElementGroupProperty,
