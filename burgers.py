@@ -16,7 +16,7 @@ order = 2
 # order = 2, u = 1, dx = 2/40, dt = 2/420, cfl = u * dt / dx => 2 / 21 ≈ 0.1
 
 # dt = 1 / 50
-stop_step = 10000
+stop_step = 100000
 skip = 100
 dim_u = 1
 CFL = 0.1
@@ -169,26 +169,26 @@ result = torch.reshape(
 # print(x)
 # print(result)
 
-# fig, ax = plt.subplots(figsize=(8, 4))
-# ax.set_xlim(-1, 1)
-# ax.set_ylim(-1, 2)
-# ax.set_xlabel('t')
-# ax.set_ylabel('u')
-# ax.set_title('u-t')
-#
-# line, = ax.plot(x, result[0], color='blue', linewidth=2)
-#
-#
-# def update(frame):
-#     line.set_ydata(result[frame])
-#     return line,
-#
-#
-# ani = FuncAnimation(fig,
-#                     update,
-#                     frames=result.shape[0],
-#                     interval=200,
-#                     blit=True,
-#                     repeat=True)
-#
-# plt.show()
+fig, ax = plt.subplots(figsize=(8, 4))
+ax.set_xlim(-1, 1)
+ax.set_ylim(-1, 2)
+ax.set_xlabel('t')
+ax.set_ylabel('u')
+ax.set_title('u-t')
+
+line, = ax.plot(x, result[0], color='blue', linewidth=2)
+
+
+def update(frame):
+    line.set_ydata(result[frame])
+    return line,
+
+
+ani = FuncAnimation(fig,
+                    update,
+                    frames=result.shape[0],
+                    interval=200,
+                    blit=True,
+                    repeat=True)
+
+plt.show()

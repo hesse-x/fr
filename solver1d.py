@@ -15,8 +15,6 @@ class Config:
             order (int): The order of accuracy of the numerical method.
             dim_u (int): The dimension of the state vector.
             CFL (float): The CFL condition number, used to control numerical stability.
-            skip (int): The step interval for result output.
-            stop_step (int): The number of steps at which the simulation terminates.
         """
         self.order = order
         self.dim_u = dim_u
@@ -25,7 +23,7 @@ class Config:
     @classmethod
     def from_dict(cls, config_dict: Dict[str, Any]) -> "Config":
         """Initialize a Config object from a dictionary."""
-        required_keys = ["order", "dim_u", "CFL", "skip", "stop_step"]
+        required_keys = ["order", "dim_u", "CFL"]
         if not all(key in config_dict for key in required_keys):
             missing_keys = [
                 key for key in required_keys if key not in config_dict
@@ -41,17 +39,10 @@ class Config:
             raise TypeError("'dim_u' must be an integer.")
         if not isinstance(config_dict["CFL"], (int, float)):
             raise TypeError("'CFL' must be a float or integer.")
-        if not isinstance(config_dict["skip"], int):
-            raise TypeError("'skip' must be an integer.")
-        if not isinstance(config_dict["stop_step"], int):
-            raise TypeError("'stop_step' must be an integer.")
 
-        return cls(
-            order=config_dict["order"],
-            dim_u=config_dict["dim_u"],
-            CFL=float(config_dict["CFL"]),  # Ensure it's a float
-            skip=config_dict["skip"],
-            stop_step=config_dict["stop_step"])
+        return cls(order=config_dict["order"],
+                   dim_u=config_dict["dim_u"],
+                   CFL=float(config_dict["CFL"]))
 
     @classmethod
     def from_string(cls, config_str: str) -> "Config":
@@ -68,8 +59,6 @@ class Config:
             "order": self.order,
             "dim_u": self.dim_u,
             "CFL": self.CFL,
-            "skip": self.skip,
-            "stop_step": self.stop_step
         }
 
     def to_string(self) -> str:
@@ -81,8 +70,7 @@ class Config:
 
     def __repr__(self) -> str:
         return (
-            f"Config(order={self.order}, dim_u={self.dim_u}, CFL={self.CFL}, "
-            f"skip={self.skip}, stop_step={self.stop_step})")
+            f"Config(order={self.order}, dim_u={self.dim_u}, CFL={self.CFL}")
 
 
 class Equation:

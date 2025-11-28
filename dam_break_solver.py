@@ -71,6 +71,51 @@ def lax_friedrichs(u: torch.Tensor, flux: torch.Tensor):
     return lax_friedrichs_flux
 
 
+def roe(u: torch.Tensor, flux: torch.Tensor):
+    """Roe格式（适配守恒变量[h, hu]）"""
+    # u形状: [界面数, 变量数, 2]，变量为[h, hu]（原代码为[h, u]）
+    h_L = u[:, 0, 0]  # 左侧水位
+    hu_L = u[:, 1, 0]  # 左侧动量（原代码为u_L）
+    h_R = u[:, 0, 1]  # 右侧水位
+    hu_R = u[:, 1, 1]  # 右侧动量（原代码为u_R）
+
+    # 从守恒变量计算流速（处理h=0）
+    h_L_safe = torch.where(h_L < 1e-6, 1e-6, h_L)
+    h_R_safe = torch.where(h_R < 1e-6, 1e-6, h_R)
+    u_L = hu_L / h_L_safe  # 左侧流速
+    u_R = hu_R / h_R_safe  # 右侧流速
+
+    # 守恒变量差分（已正确，无需修改）
+    delta_h = h_R - h_L
+    delta_hu = hu_R - hu_L  # 直接使用动量差分（原代码需计算h_R*u_R - h_L*u_L）
+
+    # Roe平均（基于流速计算，保持不变）
+    sqrt_h_L = torch.sqrt(h_L_safe)
+    sqrt_h_R = torch.sqrt(h_R_safe)
+    h_roe = sqrt_h_L * sqrt_h_R
+    u_roe = (sqrt_h_L * u_L + sqrt_h_R * u_R) / (sqrt_h_L + sqrt_h_R)
+    c_roe = torch.sqrt(g * h_roe)
+
+    # 特征值与波幅计算（保持不变）
+    lambda1 = u_roe - c_roe
+    lambda2 = u_roe + c_roe
+
+    denominator = 2 * c_roe + 1e-6
+    alpha1 = ((u_roe + c_roe) * delta_h - delta_hu) / denominator
+    alpha2 = (-(u_roe - c_roe) * delta_h + delta_hu) / denominator
+
+    r1 = torch.stack([torch.ones_like(h_roe), u_roe - c_roe], dim=0)
+    r2 = torch.stack([torch.ones_like(h_roe), u_roe + c_roe], dim=0)
+
+    flux_diff = 0.5 * (torch.abs(lambda1) * alpha1 * r1 +
+                       torch.abs(lambda2) * alpha2 * r2)
+
+    flux_L = flux[:, :, 0]
+    flux_R = flux[:, :, 1]
+    roe_flux = 0.5 * (flux_L + flux_R) - 0.5 * flux_diff.T
+    return roe_flux
+
+
 def init_field(field: mesh.ElementGroup, prop: mesh.ElementGroupProperty,
                mesh_read: mesh.Mesh):
     """初始化溃坝问题初始条件：左侧高水位，右侧低水位（守恒变量形式）"""
@@ -132,12 +177,14 @@ def reflect_boundary(interface: mesh.InterfaceGroup,
 
 mesh_ = mesh.parse_msh("cases/1d.msh")
 
-equation = solver1d.Equation(F=compute_flux,
-                             roe=lax_friedrichs,
-                             init=init_field,
-                             eigen_u=eigen_u)
+equation = solver1d.Equation(
+    F=compute_flux,
+    #                             roe=lax_friedrichs,
+    roe=roe,
+    init=init_field,
+    eigen_u=eigen_u)
 boundary = solver1d.Boundary(fn=reflect_boundary)
-correction = utils.SmoothCorrectionFlux(config.order)
+correction = utils.CorrectionFlux(config.order, c=0.5)
 solver = solver1d.Solver(mesh_=mesh_,
                          equation=equation,
                          boundary=boundary,

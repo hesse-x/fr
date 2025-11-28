@@ -4,10 +4,10 @@ import torch
 import utils
 from scipy.special import roots_legendre
 
-stop_step = 10000
+stop_step = 20000
 skip = 100
-order = 2
-root_nodes, w = roots_legendre(order + 1)
+config = solver1d.Config(order=3, dim_u=1, CFL=0.01)
+root_nodes, w = roots_legendre(config.order + 1)
 
 
 def compute_flux(u):
@@ -63,7 +63,6 @@ equation = solver1d.Equation(F=compute_flux,
                              init=init_field,
                              eigen_u=eigen_u)
 boundary = solver1d.Boundary(fn=cycle_boundary)
-config = solver1d.Config(order=order, dim_u=1, CFL=0.1)
 correction = utils.SmoothCorrectionFlux(config.order)
 solver = solver1d.Solver(mesh_=mesh_,
                          equation=equation,
