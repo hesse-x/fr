@@ -104,6 +104,11 @@ class MeshFR2D:
         self.volume=sum(b['areas'].sum().item() for b in self.blocks)
         self.neighbor=mesh.neighbor.to(device)
         self.flip=mesh.flip.to(device)
+        # Neighbor face and quadrature orientation are fixed for this mesh.
+        points=torch.arange(nq,device=device)[None,:].expand(mesh.nfaces,-1)
+        points=torch.where(self.flip[:,None],nq-1-points,points)
+        self.neighbor_points=self.neighbor[:,None]*nq+points
+        self.other_regions=self.regions[self.neighbor]
         self.tags=mesh.face_tags.to(device)[:,None].expand(mesh.nfaces,nq)
         mask=mesh.boundary.to(device)
         self.boundary_groups=[(int(tag),torch.where(mask&(mesh.face_tags.to(device)==tag))[0])
@@ -131,17 +136,14 @@ class MeshFR2D:
 
     def rhs(self,U,t=0.):
         inside=self._states(U)
-        outside=inside[self.neighbor]
-        outside=torch.where(self.flip[:,None,None],outside.flip(1),outside)
-        outside=outside.clone()
+        outside=self.neighbor_states(inside)
         for tag,indices in self.boundary_groups:
             xy=self.face_coordinates[indices]
             outside[indices]=self.boundary(tuple(xy.unbind(-1)),inside[indices],self.normals[indices],tag,t)
         def face(state,region):
             F=sum(self.normals[...,a,None]*self.flux(state,a) for a in (0,1))
             return NormalFace(state,F,tuple(self.face_coordinates.unbind(-1)),self.normals,region,self.tags)
-        other_regions=self.regions[self.neighbor]
-        common=self.numerical_flux(face(inside,self.regions),face(outside,other_regions),self.normals)
+        common=self.numerical_flux(face(inside,self.regions),face(outside,self.other_regions),self.normals)
         result=torch.empty_like(U)
         for b in self.blocks:
             V=U[b['offset']].reshape(b['ne'],b['ns'],-1)
@@ -156,6 +158,10 @@ class MeshFR2D:
             derivative=torch.cholesky_solve(residual,b['chol'])
             result[b['offset']]=derivative.reshape(-1,U.shape[-1])
         return result
+
+    def neighbor_states(self,inside):
+        """Gather neighboring traces in local quadrature order (fresh storage)."""
+        return inside.flatten(0,1)[self.neighbor_points]
 
     def integration(self,U):
         """Yield physical quadrature coordinates, states, weights and region tags."""
