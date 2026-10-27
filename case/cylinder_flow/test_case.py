@@ -5,6 +5,7 @@ import tempfile
 import unittest
 import subprocess
 import json
+from types import SimpleNamespace
 
 import torch
 
@@ -150,6 +151,28 @@ class CylinderTests(unittest.TestCase):
         torch.testing.assert_close(transferred,target.far.expand_as(transferred),rtol=1e-11,atol=1e-11)
         back=project(target,source,transferred)
         torch.testing.assert_close(back,U,rtol=1e-11,atol=1e-11)
+
+    def test_fwh_ascii_sampling(self):
+        from fwh_sampling import FWHRecorder
+        from fwh import read_ascii
+        path=Path(self.tmp.name)/'surface.dat'
+        args=SimpleNamespace(time_mode='global',mesh=self.mesh,restart=None)
+        a=self.model;U=self.state()
+        recorder=FWHRecorder(a,args,path,start=0,interval=.001,
+            envelopes=[('inner',-1.,1.5,.8),('outer',-1.5,2.,1.)])
+        recorder(U,0.)
+        # Cross several sample targets in each accepted-state interval.
+        for i in range(1,9):recorder(U,i*.025)
+        recorder.finish(U,.2)
+        meta,geo,times,data=read_ascii(path)
+        self.assertEqual(meta['surface_names'],['wall','inner','outer'])
+        self.assertEqual(len(times),21)
+        self.assertEqual(len(geo),data.shape[1])
+        self.assertAlmostEqual(times[-1],.2)
+        for sid in range(3):
+            take=geo[:,1]==sid
+            closure=(geo[take,4:6]*geo[take,6,None]).sum(0)
+            self.assertLess(float(abs(closure).max()),1e-9)
 
 
 if __name__ == '__main__':

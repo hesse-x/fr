@@ -25,7 +25,7 @@
 ```bash
 python3 -m venv venv
 source venv/bin/activate
-pip install -r requirements-plot.txt
+pip install -r requirements.txt
 
 # 查看入口参数并运行一个算例
 python -m case.ringleb --help
@@ -35,7 +35,7 @@ python -m case.ringleb --n 8 --p 3 --time .1
 python -m unittest discover -s tests -v
 ```
 
-仅做数值计算可安装 `requirements.txt`，运行时使用相应入口的 `--no-plot`。Gmsh 网格生成另外需要 PATH 中的 `gmsh` 可执行文件，读入已有网格无需调用 Gmsh。
+`requirements.txt` 统一包含数值计算、绘图和声学后处理依赖；运行时可用相应入口的 `--no-plot` 关闭绘图。Gmsh 网格生成另外需要 PATH 中的 `gmsh` 可执行文件，读入已有网格无需调用 Gmsh。
 
 `--n` 通常表示每个方向的单元数，`--p` 为多项式次数；不同入口的参数以 `--help` 为准。Cartesian 每单元有 `(p+1)^d` 个解点。部分入口提供 `--threads`、`--device`、`--cfl`；默认的小网格计算通常使用 CPU 单线程。
 

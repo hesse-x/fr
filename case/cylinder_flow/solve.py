@@ -8,6 +8,14 @@ from cylinder import ROOT
 from native import NativeCylinder
 
 
+class Observers:
+    def __init__(self,items):self.items=items
+    def __call__(self,U,t):
+        for item in self.items:item(U,t)
+    def finish(self,U,t):
+        for item in self.items:item.finish(U,t)
+
+
 def main():
     plotting=argparse.ArgumentParser(add_help=False,allow_abbrev=False)
     plotting.add_argument('--frames',type=int,default=120)
@@ -15,6 +23,9 @@ def main():
     plotting.add_argument('--plot-start',type=float,default=0.)
     plotting.add_argument('--vorticity-limit',type=float,default=3.)
     plotting.add_argument('--no-plot',action='store_true')
+    plotting.add_argument('--fwh-output',type=Path,help='write closed-contour ASCII samples for fwh.py')
+    plotting.add_argument('--fwh-start',type=float,default=0.,help='first FW-H sample, convective time')
+    plotting.add_argument('--fwh-interval',type=float,default=.05,help='uniform FW-H sample interval in convective time')
     options,remaining=plotting.parse_known_args()
     if '-h' in remaining or '--help' in remaining:
         plotting.print_help()
@@ -38,11 +49,17 @@ def main():
     for flag, value in defaults.items():
         if not any(arg == flag or arg.startswith(flag+'=') for arg in sys.argv[1:]):
             sys.argv.extend([flag, value])
-    factory=None
-    if not options.no_plot:
-        from visualize import WakeRecorder
-        factory=lambda physics,args,t: WakeRecorder(physics,args,frames=options.frames,
-            fps=options.fps,start=max(options.plot_start,t*physics.mach),limit=options.vorticity_limit)
+    def factory(physics,args,t):
+        observers=[]
+        if not options.no_plot:
+            from visualize import WakeRecorder
+            observers.append(WakeRecorder(physics,args,frames=options.frames,
+                fps=options.fps,start=max(options.plot_start,t*physics.mach),limit=options.vorticity_limit))
+        if options.fwh_output:
+            from fwh_sampling import FWHRecorder
+            observers.append(FWHRecorder(physics,args,options.fwh_output,
+                start=max(options.fwh_start,t*physics.mach),interval=options.fwh_interval))
+        return Observers(observers) if observers else None
     driver.main(observer_factory=factory)
 
 
