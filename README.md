@@ -35,6 +35,7 @@ pip install -r requirements-plot.txt
 | [case/double_slit_accuracy.py](case/double_slit_accuracy.py) | 双缝条纹、透射概率和对比度的独立精度对照 | [README](case/double_slit_accuracy/README.md) |
 | [case/naca0012-euler/](case/naca0012-euler/) | NACA0012翼型无黏Euler绕流 | [README](case/naca0012-euler/README.md) |
 | [case/naca0012-ns/](case/naca0012-ns/) | NACA0012翼型黏性Navier–Stokes绕流 | [README](case/naca0012-ns/README.md) |
+| [case/cylinder_flow/](case/cylinder_flow/) | 二维圆柱层流绕流，默认 Re=100 非定常计算 | [README](case/cylinder_flow/README.md) |
 | [case/channel-dns/](case/channel-dns/) | 恒质量流量三维槽道湍流、扰动发展及平均场统计 | [README](case/channel-dns/README.md) |
 
 ## 通用测试

@@ -16,6 +16,7 @@
 | `mesh_advection` | 曲边混合网格上的标量云图 | 标量传播 |
 | `schrodinger` | 一维概率密度曲线/二维概率密度云图及波函数实部 | 波包传播、势阱振荡和双缝干涉 |
 | `mie_cylinder` | 瞬时散射 Ez，以及采样所得散射 Ez 相量幅值 | 瞬时散射 Ez 从启动到结束的演化 |
+| `cylinder_flow` | 二维圆柱绕流涡量 | 全局物理时间推进的脱涡过程，见[运行参数](cylinder_flow/README.md) |
 
 ```bash
 # 定常算例：最后一步的 PNG
@@ -31,7 +32,7 @@ python -m case.mesh_advection --kind mixed --time 2 --frames 120 --fps 12
 python -m case.mie_cylinder --validate --frames 120 --fps 12
 ```
 
-非定常算例默认 `--frames 60 --fps 12`；`--frames 0` 只生成最后一步 PNG，
+通用非定常算例默认 `--frames 60 --fps 12`，`cylinder_flow` 默认 `--frames 120 --fps 15`；`--frames 0` 只生成最后一步 PNG，
 `--no-plot` 完全关闭绘图（无需绘图库）。定常算例也支持 `--no-plot`。
 网格生成工具本身没有物理场，不输出云图。
 

@@ -16,7 +16,7 @@ from airfoil import Airfoil
 
 
 @torch.no_grad()
-def main():
+def main(*, observer_factory=None):
     p = argparse.ArgumentParser(description=__doc__)
     base = Path(__file__).parent/'results'
     p.add_argument('--mesh',type=Path,default=base/'mesh/coarse.msh')
@@ -45,7 +45,8 @@ def main():
         p.error('invalid physical or numerical parameters')
     torch.set_default_dtype(torch.float64); torch.set_num_threads(a.threads)
     physics = Airfoil(a.mesh,a.p,a.mach,a.alpha,a.quadrature,reynolds=a.re,viscous_step_factor=a.viscous_step_factor)
-    s = physics.s; U = physics.far.expand(s.ndof,4).clone()
+    s = physics.s
+    U = physics.initial_state() if hasattr(physics, 'initial_state') else physics.far.expand(s.ndof,4).clone()
     mesh_hash=hashlib.sha256(a.mesh.read_bytes()).hexdigest()
     a.output.mkdir(parents=True,exist_ok=True)
     t=0.; step=0; history=[]; status='running'; rejected=0
@@ -58,7 +59,7 @@ def main():
         U=checkpoint['U'].clone(); t=old['pseudo_time_min']; step=old['steps']; history=checkpoint['history']
     if not physics.valid(U): raise ValueError('invalid initial state')
     rhs=physics.rhs
-    if a.compile:
+    if a.compile and not getattr(physics,'native_backend',False):
         os.environ.setdefault('TORCHINDUCTOR_CACHE_DIR','/tmp/fr-ns-steady-inductor')
         os.environ.setdefault('TORCHINDUCTOR_COMPILE_THREADS','2')
         rhs=torch.compile(rhs,fullgraph=True)
@@ -66,7 +67,10 @@ def main():
     start=time.monotonic(); residual=math.inf; cfl=a.cfl
     # Keep the RHS of exactly U: it serves both logging and RK stage one.
     F=rhs(U)
-    residual=float(s.norm(F).max())
+    residual_norm=getattr(physics,'residual_norm',lambda F: float(s.norm(F).max()))
+    residual=residual_norm(F)
+    observer=observer_factory(physics,a,t) if observer_factory is not None else None
+    if observer is not None: observer(U,t)
     residual_file=a.output/'residuals.csv'
     residual_log=residual_file.open('a' if a.restart else 'w')
     residual_writer=csv.writer(residual_log)
@@ -90,7 +94,7 @@ def main():
         residual_log.flush()
         stats=dict(status=status,steps=step,physical_time=t if a.time_mode=='global' else None,
                    pseudo_time_min=t,convective_time=t*a.mach,time_mode=a.time_mode,
-                   method='explicit_ssprk43',reynolds=a.re,mach=a.mach,alpha_deg=a.alpha,
+                   method='explicit_ssprk43',implementation=getattr(physics,'implementation','torch'),reynolds=a.re,mach=a.mach,alpha_deg=a.alpha,
                    mu=physics.mu,prandtl=physics.prandtl,p=a.p,quadrature=a.quadrature,cfl=cfl,
                    viscous_step_factor=a.viscous_step_factor,cells=s.blocks[0]['ne'],ndof=s.ndof,residual=residual,residual_tolerance=a.residual_tol,
                    residual_definition='max over conservative components of physical-volume-weighted RMS RHS',
@@ -118,7 +122,8 @@ def main():
                 if cfl<1e-6: status='nonphysical_state'; break
                 continue
             U=candidate; F=next_rhs; t+=float(dt.min()); step+=1
-            residual=float(s.norm(F).max())
+            residual=residual_norm(F)
+            if observer is not None: observer(U,t)
             if step%a.output_every==0:
                 report()
             if step%1000==0:
@@ -132,6 +137,7 @@ def main():
         report()
     save()
     residual_log.close()
+    if observer is not None: observer.finish(U,t)
     if status=='nonphysical_state': raise RuntimeError('nonphysical candidate rejected; last valid state saved')
 
 
