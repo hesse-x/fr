@@ -34,10 +34,13 @@ class CartesianFR:
     is -1 or +1. Periodic axes bypass this callback. All fluxes use the
     positive coordinate direction, including the lower domain boundary.
     Optional source(coords,U,t) returns a volume source of the same state shape.
+    Optional edges supplies one increasing cell-edge array per axis (None
+    selects uniform edges). Local derivatives, quadrature and CFL use widths;
+    h retains mean widths for compatibility with existing uniform-grid cases.
     """
     def __init__(self, cells, bounds, p=3, *, flux, numerical_flux=None,
                  flux_pair=None, face_flux=None, boundary=None, periodic=False,
-                 speed=None, source=None, device='cpu'):
+                 speed=None, source=None, device='cpu', edges=None):
         self.cells = tuple(cells)
         self.bounds = tuple(tuple(b) for b in bounds)
         self.dim, self.p, self.device = len(self.cells), p, device
@@ -60,6 +63,21 @@ class CartesianFR:
         self.boundary, self.speed, self.source = boundary, speed, source
         self.z,self.w,self.D,self.L,self.R,self.gl,self.gr = operators(p,device)
         self.h = tuple((b-a)/n for n,(a,b) in zip(self.cells,self.bounds))
+        if edges is not None and len(edges) != self.dim:
+            raise ValueError('one edge array per direction required')
+        self.edges = []
+        for axis, (n, (a, b)) in enumerate(zip(self.cells, self.bounds)):
+            values = None if edges is None else edges[axis]
+            edge = (torch.linspace(a, b, n+1, dtype=torch.float64, device=device)
+                    if values is None else torch.as_tensor(values, dtype=torch.float64, device=device))
+            if (edge.ndim != 1 or edge.numel() != n+1 or not bool(torch.isfinite(edge).all())
+                    or not bool((edge[1:] > edge[:-1]).all())
+                    or not math.isclose(float(edge[0]), a, abs_tol=1e-12)
+                    or not math.isclose(float(edge[-1]), b, abs_tol=1e-12)):
+                raise ValueError('edges must increase strictly and match cell counts and bounds')
+            self.edges.append(edge)
+        self.widths = tuple(e[1:]-e[:-1] for e in self.edges)
+        self.nonuniform = edges is not None
         self.shape = self.cells+(p+1,)*self.dim
         coords=[]
         for axis,(n,(a,b),h) in enumerate(zip(self.cells,self.bounds,self.h)):
@@ -67,8 +85,8 @@ class CartesianFR:
             nshape=eshape.copy()
             eshape[axis]=n
             nshape[self.dim+axis]=p+1
-            center=a+(torch.arange(n,dtype=torch.float64,device=device)+.5)*h
-            coords.append((center.reshape(eshape)+h/2*self.z.reshape(nshape)).expand(self.shape))
+            center=(self.edges[axis][:-1]+self.edges[axis][1:])/2
+            coords.append((center.reshape(eshape)+self.widths[axis].reshape(eshape)/2*self.z.reshape(nshape)).expand(self.shape))
         self.coords=tuple(coords)
         weights=torch.ones((p+1,)*self.dim,dtype=torch.float64,device=device)
         for axis in range(self.dim):
@@ -88,7 +106,7 @@ class CartesianFR:
                 for j,x in enumerate(self.coords):
                     value=self._trace(x.permute(perm),vector)
                     if j==axis:
-                        positions=self.bounds[axis][0]+self.h[axis]*(torch.arange(self.cells[axis],dtype=value.dtype,device=device)+(0 if side==-1 else 1))
+                        positions=self.edges[axis][:-1] if side == -1 else self.edges[axis][1:]
                         value=positions.reshape((self.cells[axis],)+(1,)*(value.ndim-1)).expand_as(value)
                     values.append(value)
                 full_pair.append(tuple(values))
@@ -99,6 +117,17 @@ class CartesianFR:
     def _permutation(self, axis):
         rest=[a for a in range(self.dim) if a!=axis]
         return [axis]+rest+[self.dim+axis]+[self.dim+a for a in rest]+[2*self.dim]
+
+    def cell_width(self, axis, variables=True):
+        """Physical widths broadcast over state (or scalar grid) layout.
+
+        h retains mean widths for compatibility; use this for local metrics.
+        """
+        if not self.nonuniform:
+            return self.h[axis]
+        shape = [1]*(2*self.dim+int(variables))
+        shape[axis] = self.cells[axis]
+        return self.widths[axis].reshape(shape)
 
     def _trace(self,A,vector):
         return (A.movedim(self.dim,-1)*vector).sum(-1)
@@ -134,12 +163,17 @@ class CartesianFR:
             deriv=deriv+self.gl.reshape(shape)*(common[:-1]-fl).unsqueeze(self.dim)
             deriv=deriv+self.gr.reshape(shape)*(common[1:]-fr).unsqueeze(self.dim)
             inverse=[perm.index(i) for i in range(U.ndim)]
-            out=out-2/h*deriv.permute(inverse)
+            out=out-2/self.cell_width(axis)*deriv.permute(inverse)
         return out if self.source is None else out+self.source(self.coords,U,t)
 
     def integral(self,U):
         dims=tuple(range(2*self.dim))
-        return (U*self.weights[...,None]).sum(dims)*math.prod(self.h)/2**self.dim
+        weighted = U*self.weights[...,None]
+        if self.nonuniform:
+            for axis in range(self.dim):
+                weighted = weighted*self.cell_width(axis)/2
+            return weighted.sum(dims)
+        return weighted.sum(dims)*math.prod(self.h)/2**self.dim
 
     def norm(self,U):
         return (self.integral(U*U)/math.prod(b-a for a,b in self.bounds)).sqrt()
@@ -149,7 +183,7 @@ class CartesianFR:
             raise ValueError('CFL time step requires speed(U,axis) callback; otherwise use fixed dt')
         if not math.isfinite(cfl) or cfl<=0:
             raise ValueError('CFL must be finite and positive')
-        rate=sum(self.speed(U,a)/h for a,h in enumerate(self.h)).max().item()
+        rate=sum(self.speed(U,a)/self.cell_width(a, variables=False) for a in range(self.dim)).max().item()
         if not math.isfinite(rate) or rate<0:
             raise ValueError('wave speed must be finite and nonnegative')
         return cfl/((2*self.p+1)*rate) if rate else 1e30

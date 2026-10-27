@@ -46,7 +46,7 @@ class CartesianLDG:
         shape[s.dim] = s.p+1
         d = d+s.gl.reshape(shape)*(common[:-1]-l).unsqueeze(s.dim)
         d = d+s.gr.reshape(shape)*(common[1:]-r).unsqueeze(s.dim)
-        return (2/s.h[axis])*d.permute([perm.index(i) for i in range(U.ndim)])
+        return (2/s.cell_width(axis))*d.permute([perm.index(i) for i in range(U.ndim)])
 
     def gradient(self, U, t=0.):
         return torch.stack([self.derivative(U, a, t=t) for a in range(self.grid.dim)], -1)
