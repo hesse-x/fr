@@ -12,6 +12,7 @@
 | `isentropic_vortex` | 密度、压力、Mach | 三个物理量随时间演化 |
 | `acoustic_pml`、`acoustic_mean_flow_pml` | 压力扰动 | 柱面波传播及 PML 吸收 |
 | `maxwell_cavity` | Ez、电场模、磁场模 | 同一物理截面的驻波振荡 |
+| `uniform_array` | xy 截面 Ez、远场功率方向图及解析对照 | 阵列辐射的建立过程 |
 | `advection` | 标量场；1D 为曲线 | 1D/2D/3D 对流演化 |
 | `mesh_advection` | 曲边混合网格上的标量云图 | 标量传播 |
 | `schrodinger` | 一维概率密度曲线/二维概率密度云图及波函数实部 | 波包传播、势阱振荡和双缝干涉 |

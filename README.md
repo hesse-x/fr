@@ -26,6 +26,7 @@ pip install -r requirements.txt
 | [case/prandtl_meyer.py](case/prandtl_meyer.py) | 普朗特–迈耶膨胀扇的解析场与高阶精度验证 | [README](case/prandtl_meyer/README.md) |
 | [case/isentropic_vortex.py](case/isentropic_vortex.py) | 二维周期等熵涡平移及误差、守恒验证 | [README](case/isentropic_vortex/README.md) |
 | [case/maxwell_cavity.py](case/maxwell_cavity.py) | 三维PEC腔体电磁驻波与解析模态对照 | [README](case/maxwell_cavity/README.md) |
+| [case/uniform_array/](case/uniform_array/) | 三维均匀电流源线阵、相位扫描/端射/差波束，PML和近远场变换，与解析阵列因子对照 | [README](case/uniform_array/README.md) |
 | [case/acoustic_pml.py](case/acoustic_pml.py) | 二维柱面声脉冲及随流移动PML吸收 | [README](case/acoustic_pml/README.md) |
 | [case/acoustic_mean_flow_pml.py](case/acoustic_mean_flow_pml.py) | 固定网格背景流声学/线化Euler脉冲与现有PML的数值实验 | [README](case/acoustic_mean_flow_pml/README.md) |
 | [case/mesh_generation.py](case/mesh_generation.py) | Gmsh贴体、曲边和不规则网格生成 | [README](case/mesh_generation/README.md) |
