@@ -11,13 +11,20 @@ def rk4(rhs, U, t, dt):
     return U+dt/6*(k1+2*k2+2*k3+k4)
 
 
-def ssprk43(rhs, U, t, dt):
+def ssprk43_stages(t, dt):
+    """(RHS time, RHS coefficient, blend original) for fused native steppers."""
+    return ((t, dt/2, False), (t+dt/2, dt/2, False),
+            (t+dt, dt/6, True), (t+dt/2, dt/2, False))
+
+
+def ssprk43(rhs, U, t, dt, *, first_rhs=None):
     """Four-stage third-order SSP RK, SSP coefficient 2.
 
     Stage abscissae: 0, 1/2, 1, 1/2. Strong stability inherits the
     forward-Euler property only when dt <= 2*dt_FE.
+    first_rhs optionally reuses rhs(U,t); dt may broadcast over the state.
     """
-    u1 = U+dt/2*rhs(U,t)
+    u1 = U+dt/2*(rhs(U,t) if first_rhs is None else first_rhs)
     u2 = u1+dt/2*rhs(u1,t+dt/2)
     u3 = 2/3*U+1/3*u2+dt/6*rhs(u2,t+dt)
     return u3+dt/2*rhs(u3,t+dt/2)

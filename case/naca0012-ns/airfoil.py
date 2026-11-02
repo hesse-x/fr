@@ -3,6 +3,7 @@ import importlib.util
 from pathlib import Path
 import math
 import torch
+from fr.time import ssprk43
 
 spec = importlib.util.spec_from_file_location('naca_euler_physics', Path(__file__).parents[1]/'naca0012-euler/airfoil.py')
 module = importlib.util.module_from_spec(spec)
@@ -110,10 +111,8 @@ class Airfoil(module.Airfoil):
             def f(X):
                 return self.rhs(X.reshape_as(U)).reshape_as(V)
 
-            u1 = V+.5*dt*first_rhs.reshape_as(V)
-            u2 = u1+.5*dt*f(u1)
-            u3 = 2/3*V+1/3*u2+dt/6*f(u2)
-            candidate = (u3+.5*dt*f(u3)).reshape_as(U)
+            candidate = ssprk43(lambda X,t: f(X), V, 0., dt,
+                                first_rhs=first_rhs.reshape_as(V)).reshape_as(U)
             return candidate, dt, self.rhs(candidate)
 
         return torch.compile(step, fullgraph=True) if compile else step

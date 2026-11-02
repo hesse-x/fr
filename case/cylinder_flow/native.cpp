@@ -7,6 +7,8 @@
 #include <cmath>
 #include <limits>
 #include <vector>
+#include "../../fr/native/time.hpp"
+#include "../../fr/native/boundaries.hpp"
 
 namespace {
 using at::Tensor;
@@ -78,17 +80,6 @@ inline double euler_normal(const double* u,double nx,double ny,double* f) {
   f[1]+=pr*nx; f[2]+=pr*ny; f[3]+=pr*un;
   return std::abs(un)+std::sqrt(1.4*pr/u[0]);
 }
-inline void outer_state(const double* u,double nx,double ny,const Plan& p,double* r) {
-  double w[3]; primitive(u,w);
-  double un=w[0]*nx+w[1]*ny, unf=p.far[1]*nx+p.far[2]*ny;
-  double rp=un+5*std::sqrt(1.4*w[2]), rm=unf-5;
-  double ub=.5*(rp+rm), cb=.1*(rp-rm);
-  double entropy=un<0?1/1.4:pressure(u)/std::pow(u[0],1.4);
-  double rho=std::pow(cb*cb/(1.4*entropy),2.5), pr=entropy*std::pow(rho,1.4);
-  double vx=(un<0?p.far[1]-unf*nx:w[0]-un*nx)+ub*nx;
-  double vy=(un<0?p.far[2]-unf*ny:w[1]-un*ny)+ub*ny;
-  r[0]=rho; r[1]=rho*vx; r[2]=rho*vy; r[3]=pr/.4+.5*rho*(vx*vx+vy*vy);
-}
 
 struct Workspace {
   Tensor w,l,wl,g,gl;
@@ -129,9 +120,8 @@ void rhs_kernel(const Tensor& U,Tensor& out,const Plan& p,Workspace& ws) {
       for(int f=0;f<p.edges;++f) for(int64_t q=0;q<p.nf;++q) {
         int64_t face=p.ids[e*p.edges+f], k=face*p.nf+q, other=p.neighbor[k];
         for(int v=0;v<3;++v) {
-          double t=.5*(wl[k*3+v]+wl[other*3+v]);
-          if(p.tag[face]==2) t=v<2?0:wl[k*3+v];
-          if(p.tag[face]==1) t=v<2?p.far[v+1]:1/1.4;
+          double t=fr_boundary::primitive_trace(wl[k*3+v],wl[other*3+v],
+              v<2?p.far[v+1]:1/1.4,v,p.tag[face]==2,p.tag[face]==1);
           trace[(f*p.nf+q)*3+v]=t;
         }
       }
@@ -172,7 +162,7 @@ void rhs_kernel(const Tensor& U,Tensor& out,const Plan& p,Workspace& ws) {
         int64_t face=p.ids[e*p.edges+f],k=face*p.nf+q,other=p.neighbor[k];
         double nx=p.normal[k*2],ny=p.normal[k*2+1],r[4],fl[4],fr[4],vl[4],vr[4];
         std::copy_n(l+other*4,4,r);
-        if(p.tag[face]==1) outer_state(l+k*4,nx,ny,p,r);
+        if(p.tag[face]==1) fr_boundary::euler_characteristic(l+k*4,nx,ny,p.far,r);
         double speed=std::max(euler_normal(l+k*4,nx,ny,fl),euler_normal(r,nx,ny,fr));
         double* c=common.data()+(f*p.nf+q)*4;
         for(int v=0;v<4;++v) c[v]=.5*(fl[v]+fr[v])-speed*.5*(r[v]-l[k*4+v]);
@@ -185,9 +175,8 @@ void rhs_kernel(const Tensor& U,Tensor& out,const Plan& p,Workspace& ws) {
         viscous_normal(wl+other*3,gl+other*6,nx,ny,p,vr);
         double jump[3];
         for(int v=0;v<3;++v) {
-          jump[v]=wl[other*3+v]-wl[k*3+v];
-          if(p.tag[face]==1) jump[v]=(v<2?p.far[v+1]:1/1.4)-wl[k*3+v];
-          if(p.tag[face]==2) jump[v]=v<2?-wl[k*3+v]:0.;
+          jump[v]=fr_boundary::primitive_jump(wl[k*3+v],wl[other*3+v],
+              v<2?p.far[v+1]:1/1.4,v,p.tag[face]==2,p.tag[face]==1);
         }
         double visc[4]; for(int v=0;v<4;++v) visc[v]=.5*(vl[v]+vr[v]);
         visc[1]+=p.penalty[k]*jump[0]; visc[2]+=p.penalty[k]*jump[1];
@@ -243,13 +232,14 @@ std::tuple<Tensor,Tensor,Tensor> step(const Tensor& u,const Tensor& cfl,const Te
     const double* r=force.const_data_ptr<double>();
     at::parallel_for(0,p.ne,16,[&](int64_t begin,int64_t end) {
       for(int64_t e=begin;e<end;++e) for(int64_t j=e*p.ns*4;j<(e+1)*p.ns*4;++j)
-        out[j]=stage==2?(2./3)*base[j]+(1./3)*v[j]+d[e]/6*r[j]:v[j]+.5*d[e]*r[j];
+        out[j]=fr_time::SSPRK43::update(base[j],v[j],r[j],d[e],stage);
     });
   };
-  update(a,u,first,0); rhs_kernel(a,f,p,ws);
-  update(b,a,f,1); rhs_kernel(b,f,p,ws);
-  update(a,b,f,2); rhs_kernel(a,f,p,ws);
-  update(b,a,f,3); rhs_kernel(b,f,p,ws);
+  fr_time::ssprk43(
+    [&](int stage) {
+      update(stage%2?b:a,stage==0?u:(stage%2?a:b),stage==0?first:f,stage);
+    },
+    [&](int stage) { rhs_kernel(stage%2?b:a,f,p,ws); });
   return {b,dt,f};
 }
 bool valid(const Tensor& U,const Tensors& data,double mu,double pr,double diffusion) {

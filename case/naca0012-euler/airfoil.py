@@ -1,6 +1,7 @@
 """Airfoil Euler FR-DG physics with explicit global or local time stepping."""
 import math
 import torch
+from fr.boundaries import euler_characteristic, euler_slip_wall
 from fr import Mesh2D, MeshFR2D
 from fr.equations import Euler
 
@@ -39,24 +40,8 @@ class Airfoil:
 
     def boundary(self,coords,U,n,tag,t):
         if tag==2:
-            outside=U.clone()
-            outside[...,1:3]-=2*(U[...,1:3]*n).sum(-1)[...,None]*n
-            return outside
-        rho,vel,p=self.eq.primitive(U)
-        c=(1.4*p/rho).sqrt()
-        un=(vel*n).sum(-1)
-        vinf=self.far[1:3]
-        unf=(vinf*n).sum(-1)
-        rp=un+5*c
-        rm=unf-5
-        ub=.5*(rp+rm); cb=.1*(rp-rm)
-        incoming=un<0
-        entropy=torch.where(incoming,torch.full_like(rho,1/1.4),p/rho**1.4)
-        rb=(cb**2/(1.4*entropy))**2.5
-        pb=entropy*rb**1.4
-        tangent=torch.where(incoming[...,None],vinf-unf[...,None]*n,vel-un[...,None]*n)
-        vb=tangent+ub[...,None]*n
-        return torch.cat((rb[...,None],rb[...,None]*vb,(pb/.4+.5*rb*(vb**2).sum(-1))[...,None]),-1)
+            return euler_slip_wall(coords,U,n,tag,t)
+        return euler_characteristic(U,n,self.far,self.eq)
 
     def numerical_flux(self,L,R,n):
         e=self.eq

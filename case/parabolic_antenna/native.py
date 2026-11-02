@@ -5,6 +5,7 @@ from pathlib import Path
 import subprocess
 
 import torch
+from fr.native import header_bytes
 
 _LIBRARY = None
 
@@ -16,7 +17,7 @@ def load_library():
     source = Path(__file__).with_suffix('.cpp')
     flags = ['-O3', '-std=c++17', '-march=native', '-fopenmp',
              '-ffp-contract=fast', '-fno-math-errno', '-shared', '-fPIC']
-    key = hashlib.sha256(source.read_bytes()+' '.join(flags).encode()).hexdigest()[:16]
+    key = hashlib.sha256(source.read_bytes()+header_bytes()+' '.join(flags).encode()).hexdigest()[:16]
     build = Path('/tmp/fr-parabolic-native')/key
     build.mkdir(parents=True, exist_ok=True)
     target = build/'antenna.so'

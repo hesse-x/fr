@@ -5,6 +5,7 @@ axis. Material interfaces, conductivity and divergence cleaning are absent.
 """
 import math
 import torch
+from ..boundaries import maxwell_pec
 
 
 class Maxwell:
@@ -63,11 +64,7 @@ class Maxwell:
 
         The average traces enforce E_t=0 and H_n=0 on either box wall.
         """
-        ghost=inside.clone()
-        ghost[...,:3]=-inside[...,:3]
-        ghost[...,axis]=inside[...,axis]
-        ghost[...,axis+3]=-inside[...,axis+3]
-        return ghost
+        return maxwell_pec(coords,inside,axis,side,t)
 
     def energy_density(self,U):
         return .5*(self.epsilon*(U[...,:3]**2).sum(-1)+self.mu*(U[...,3:]**2).sum(-1))

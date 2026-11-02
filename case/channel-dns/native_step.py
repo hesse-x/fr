@@ -6,6 +6,7 @@ from pathlib import Path
 import subprocess
 
 import torch
+from fr.time import ssprk43_stages
 
 from native_build import header_bytes, compiler_flags
 
@@ -111,8 +112,7 @@ class NativeFluxStepper:
         self.check(state)
         original, stage = state, state
         # Native source application and RK algebra share one output pass.
-        for stage_time, coefficient, combined in ((t, dt/2, False), (t+dt/2, dt/2, False),
-                                                   (t+dt, dt/6, True), (t+dt/2, dt/2, False)):
+        for stage_time, coefficient, combined in ssprk43_stages(t, dt):
             rhs = self.base_rhs(stage, stage_time)
             self.last_force = self.library.flux_force(rhs.data_ptr(), self.weights.data_ptr(),
                 self.scales.data_ptr(), self.elements, torch.get_num_threads())
@@ -139,7 +139,7 @@ class NativeLocalRKStepper(NativeFluxStepper):
     def advance(self, state, t, dt):
         self.check(state)
         original, stage = state, state
-        for coefficient, combined in ((dt/2, False), (dt/2, False), (dt/6, True), (dt/2, False)):
+        for _, coefficient, combined in ssprk43_stages(t, dt):
             output = torch.empty_strided(stage.shape, stage.stride(), dtype=stage.dtype)
             self.plan.rk_stage(original, stage, output, self.pending, coefficient, combined)
             self.last_force = self.library.flux_force(self.pending.data_ptr(), self.weights.data_ptr(),
@@ -161,8 +161,8 @@ class NativeLocalRKStepper(NativeFluxStepper):
                 or not integral.movedim(-1, 0).is_contiguous()):
             raise ValueError('expected matching SoA time integral')
         original, stage = state, state
-        stages = ((dt/2, False), (dt/2, False), (dt/6, True), (dt/2, False))
-        for index, (coefficient, combined) in enumerate(stages):
+        stages = ssprk43_stages(t, dt)
+        for index, (_, coefficient, combined) in enumerate(stages):
             output = torch.empty_strided(stage.shape, stage.stride(), dtype=stage.dtype)
             self.plan.rk_stage(original, stage, output, self.pending, coefficient, combined)
             self.last_force = self.library.flux_force(self.pending.data_ptr(), self.weights.data_ptr(),

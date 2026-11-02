@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 
 import torch
+from fr.native import header_bytes
 from torch.utils.cpp_extension import load
 
 from cylinder import Cylinder
@@ -17,7 +18,7 @@ def load_operators():
         return
     source = Path(__file__).with_name('native.cpp')
     flags = ['-O3','-std=c++20','-march=native','-fopenmp','-ffp-contract=fast','-fno-math-errno']
-    key = hashlib.sha256(source.read_bytes()+torch.__version__.encode()+
+    key = hashlib.sha256(source.read_bytes()+header_bytes()+torch.__version__.encode()+
                          ' '.join(flags).encode()).hexdigest()[:16]
     build = Path('/tmp/fr-cylinder-native')/key
     build.mkdir(parents=True,exist_ok=True)

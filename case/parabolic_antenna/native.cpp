@@ -3,6 +3,8 @@
 #include <cmath>
 #include <cstdint>
 #include <vector>
+#include "../../fr/native/time.hpp"
+#include "../../fr/native/boundaries.hpp"
 #include <omp.h>
 
 struct Solver {
@@ -91,11 +93,10 @@ struct Solver {
                     double ghost[6];
                     const double* other;
                     if(boundary && boundary_kind==1) {
-                        std::fill(ghost,ghost+6,0.);
+                        fr_boundary::zero_incoming(ghost,6);
                         other=ghost; // Incoming characteristic zero: Silver-Muller.
                     } else if(pec) {
-                        for(int v=0;v<6;++v)
-                            ghost[v]=((v<3 && v!=a) || v==a+3) ? -own[v] : own[v];
+                        fr_boundary::maxwell_pec(own,a,ghost);
                         other=ghost;
                     } else other=&traces[face_local(neighbor,a,1-s,b,c)];
                     double* f=&faces[face_local(e,a,s,b,c)];
@@ -173,19 +174,20 @@ struct Solver {
             std::copy(u,u+count,stage.data());
             project(stage.data(),signal(t));
         }
-        for(int s=0;s<4;++s) {
-            rhs((s||!feed_ids.empty())?stage.data():u,k.data(),t+(s==0?0.:s==3?dt:dt/2));
-            const double weight=(s==0||s==3)?1.:2.;
-            const double factor=s==2?dt:dt/2;
+        fr_time::rk4(t,dt,
+          [&](int s,double stage_time) {
+            rhs((s||!feed_ids.empty())?stage.data():u,k.data(),stage_time);
+          },
+          [&](int s,double weight,double factor) {
             #pragma omp parallel for num_threads(threads) schedule(static)
             for(size_t p=0;p<count;++p) {
-                if(s==0) acc[p]=k[p]; else acc[p]+=weight*k[p];
-                if(s<3) stage[p]=u[p]+factor*k[p];
-                else out[p]=u[p]+dt/6*acc[p];
+                double value=fr_time::rk4_update(u[p],k[p],acc[p],s,dt,weight,factor);
+                if(s<3) stage[p]=value; else out[p]=value;
             }
-            if(s<3) project(stage.data(),signal(t+(s==2?dt:dt/2)));
-            else project(out,signal(t+dt));
-        }
+          },
+          [&](int s,double stage_time) {
+            project(s<3?stage.data():out,signal(stage_time));
+          });
     }
 };
 extern "C" {
