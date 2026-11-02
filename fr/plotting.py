@@ -56,11 +56,12 @@ class FieldSampler:
             self.zslice=None
             if self.dim==3:
                 lo,hi=solver.bounds[2]; z=(lo+hi)/2
-                cell=min(solver.cells[2]-1,int((z-lo)/solver.h[2]))
-                ref=2*(z-lo-cell*solver.h[2])/solver.h[2]-1
+                cell=min(solver.cells[2]-1, int(torch.searchsorted(solver.edges[2], torch.tensor(z, dtype=torch.float64, device=device), right=True))-1)
+                width=solver.widths[2][cell]
+                ref=float(2*(z-solver.edges[2][cell])/width-1)
                 self.zslice=(cell,_lagrange(solver.z,torch.tensor([ref],dtype=torch.float64,device=device))[0])
                 self.note=f' (xy slice, z={z:g})'
-            edges=[torch.linspace(lo,hi,count*n+1,dtype=torch.float64) for count,(lo,hi) in zip(solver.cells,solver.bounds)]
+            edges=[torch.cat(((e[:-1, None]+(e[1:]-e[:-1])[:, None]*torch.arange(n, dtype=torch.float64, device=device)/n).flatten(), e[-1:])).cpu() for e in solver.edges]
             if self.dim==1:
                 self.x=((edges[0][:-1]+edges[0][1:])/2).numpy()
             else:
