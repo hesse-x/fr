@@ -39,7 +39,7 @@ venv/bin/python case/cylinder_flow/solve.py \
 
 仅检查启动时，可将求解命令中的 `--max-steps` 改为 `20`，并加 `--no-plot`，同时换用独立输出目录。20 步只验证启动，不能观察到涡街。继续同一网格的计算时，在原求解参数上加 `--restart <输出目录>/solution.pt`，并提高 `--time` 和累计 `--max-steps` 上限；物理参数、网格、p、过积分参数和时间模式必须匹配。
 
-首次求解通过 `torch.utils.cpp_extension.load` 编译并缓存自定义算子到 `/tmp/fr-cylinder-native/`，后续相同源码与构建配置复用缓存。使用 `TORCH_LIBRARY` 注册 CPU 算子，Python 通过 `torch.ops.cylinder_flow` 调用；数据直接使用 CPU FP64 Tensor，不需要 ctypes 或 NumPy 转换。默认 4 线程，可用 `--threads` 调整。
+首次求解通过 `torch.utils.cpp_extension.load` 编译并缓存自定义算子到 `/tmp/fr-compressible-native/`，后续相同源码与构建配置复用缓存。使用 `TORCH_LIBRARY` 注册 CPU 算子，Python 通过 `torch.ops.cylinder_flow` 调用；数据直接使用 CPU FP64 Tensor，不需要 ctypes 或 NumPy 转换。默认 4 线程，可用 `--threads` 调整。
 
 ## 网格加密与可选结构网格
 
@@ -118,7 +118,7 @@ venv/bin/python case/cylinder_flow/solve.py --mesh case/cylinder_flow/results/me
 venv/bin/python case/cylinder_flow/solve.py --restart case/cylinder_flow/results/re100/solution.pt --max-steps 2000000 --time 200
 ```
 
-输出与 NACA0012-NS 一致：`residuals.csv` 默认每 100 步记录残差；`history.csv`、`wall.csv`、`metrics.json`、`solution.pt` 在初始、每 1000 步和结束时保存。支持 `--re`、`--mach`、`--p`、`--cfl` 等参数，详见 `solve.py --help`。原生路径已编译，不需要 `--compile`（传入也不会再运行 Inductor）。启动壁面惩罚产生的载荷不能作为收敛气动力引用；短步测试也不能证明已形成涡街。
+输出与 NACA0012-NS 一致：`residuals.csv` 默认每 100 步记录残差；`history.csv`、`wall.csv`、`metrics.json`、`solution.pt` 在初始、每 1000 步和结束时保存。支持 `--re`、`--mach`、`--p`、`--cfl` 等参数，详见 `solve.py --help`。求解器仅使用 native 路径。启动壁面惩罚产生的载荷不能作为收敛气动力引用；短步测试也不能证明已形成涡街。
 
 ## FR 近场与 FW–H 远场：两个脚本、ASCII 交互
 
@@ -209,15 +209,15 @@ venv/bin/python -m unittest discover -s case/cylinder_flow -p 'test*.py' -v
 
 ## 原生计算与验证
 
-生产路径是 [native.cpp](native.cpp) 中的 PyTorch CPU 自定义 C++ 算子：`rhs`、`step`、`valid`、`residual_norm`，支持单一类型的曲边三角形或四边形。完整 SSPRK(4,3) 步在一次算子调用中完成四次新 RHS 求值，复用起始 RHS 和步内工作区；按单元并行，体通量和面通量在单元局部计算后立即用于导数/提升。没有修改物理通量、BR1 离散、边界条件或稳定性步长估计。未开启 fast-math；允许 FMA。Python 仅承担网格预计算、运行控制、载荷后处理和文件输出。自定义算子限 CPU FP64 连续 Tensor，用于无梯度数值模拟。
+生产路径是 [共享 compressible.cpp](../../fr/native/compressible.cpp) 中的 PyTorch CPU 自定义 C++ 算子（本目录 `native.cpp` 保留兼容入口）：`rhs`、`step`、`valid`、`residual_norm`，支持单一类型的曲边三角形或四边形。完整 SSPRK(4,3) 步在一次算子调用中完成四次新 RHS 求值，复用起始 RHS 和步内工作区；按单元并行，体通量和面通量在单元局部计算后立即用于导数/提升。没有修改物理通量、BR1 离散、边界条件或稳定性步长估计。未开启 fast-math；允许 FMA。Python 仅承担网格预计算、运行控制、载荷后处理和文件输出。自定义算子限 CPU FP64 连续 Tensor，用于无梯度数值模拟。
 
-`cylinder.py` 复用 NACA 的 Torch 物理作为独立参照和载荷后处理，不另保留一套 Torch 优化内核。共享 NS 驱动增加了初场、原生残差和原生后端识别钩子，NACA 默认算法不变。
+`cylinder.py` 复用 NACA 的网格预计算、边界物理和载荷后处理。小网格独立参照位于 `tests/compressible_reference.py`，通过通用 MeshFR2D 算子组装，不提供生产后端切换。共享 NS 驱动增加了初场、原生残差和原生后端识别钩子，NACA 默认算法不变。
 
 ```bash
 venv/bin/python -m unittest discover -s case/cylinder_flow -p test_case.py -v
 venv/bin/python case/cylinder_flow/benchmark.py --threads 4 --warmup 3 --steps 10 --repeats 3 --output /tmp/cylinder-performance.json
 ```
 
-流场测试涵盖曲边几何、非均匀状态的完整原生 RHS、三角形 p=1/2/3、四边形 p=1/2、斜向来流、全局/局部时间步、RK 终态、正性检查、体积加权残差、两种单元间的常状态 L2 投影，以及指定 p=1 的端到端 GIF 输出；与原 NACA Torch 实现对照。黏性边界收支及绝热条件也检查了用于载荷计算的共享 Torch 路径。加上 ASCII 采样、FW–H 通量转换、二维解析声场、Green 函数导数和音调拟合，共 13 项测试。结构网格的面积为 `599.214601827346`，解析值 `599.214601836603`，最小 Jacobian 为正。
+流场测试涵盖曲边几何、非均匀状态的完整原生 RHS、三角形 p=1/2/3、四边形 p=1/2、斜向来流、全局/局部时间步、RK 终态、正性检查、体积加权残差、两种单元间的常状态 L2 投影，以及指定 p=1 的端到端 GIF 输出；与通用 MeshFR2D 和测试辅助参照对照。黏性边界收支及绝热条件也检查了用于载荷计算的共享 Torch 路径。加上 ASCII 采样、FW–H 通量转换、二维解析声场、Green 函数导数和音调拟合，共 13 项测试。结构网格的面积为 `599.214601827346`，解析值 `599.214601836603`，最小 Jacobian 为正。
 
 性能口径、实测数据和运行成本见 [perf.md](perf.md)。

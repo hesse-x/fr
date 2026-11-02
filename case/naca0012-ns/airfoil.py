@@ -1,9 +1,8 @@
-"""Experimental compressible laminar NS on curved triangles (BR1 + penalty)."""
+"""BR1 NS geometry, constitutive laws and wall-load postprocessing for native runs."""
 import importlib.util
 from pathlib import Path
 import math
 import torch
-from fr.time import ssprk43
 
 spec = importlib.util.spec_from_file_location('naca_euler_physics', Path(__file__).parents[1]/'naca0012-euler/airfoil.py')
 module = importlib.util.module_from_spec(spec)
@@ -88,41 +87,6 @@ class Airfoil(module.Airfoil):
         common[self.wall_ids,:,3] = 0.
         value = -self.Gx@volume_flux[...,0]-self.Gy@volume_flux[...,1]-self.lift_matrix@common[b['ids']].reshape(b['ne'],-1,4)
         return value.reshape_as(U), common
-
-    def rhs(self, U):
-        return super().rhs(U)+self.viscous(U)[0]
-
-    def make_step_with_rhs(self, time_mode='global', *, compile=False):
-        """Reuse RHS(U) as stage one and return RHS of the accepted candidate.
-
-        After the initial RHS evaluation this uses four new RHS evaluations per
-        complete SSPRK(4,3) step, including the next state's residual for logging
-        and reuse by the following step. A rejected candidate discards its RHS.
-        """
-        if time_mode not in ('global', 'local'):
-            raise ValueError('unknown time mode')
-
-        def step(U, cfl, first_rhs):
-            dt = self.local_dt(U, cfl)
-            if time_mode == 'global':
-                dt = dt.amin().expand_as(dt)
-            V = U.reshape(-1, self.s.blocks[0]['ns'], 4)
-
-            def f(X):
-                return self.rhs(X.reshape_as(U)).reshape_as(V)
-
-            candidate = ssprk43(lambda X,t: f(X), V, 0., dt,
-                                first_rhs=first_rhs.reshape_as(V)).reshape_as(U)
-            return candidate, dt, self.rhs(candidate)
-
-        return torch.compile(step, fullgraph=True) if compile else step
-
-    def local_dt(self, U, cfl):
-        convective = super().local_dt(U,cfl)
-        b = self.s.blocks[0]
-        rho = (b['B']@U.reshape(b['ne'],b['ns'],4))[...,0].amin(1)
-        diffusive = self.viscous_step_factor*cfl*self.h**2*rho/(16*self.penalty*(self.s.p+1)**4*self.mu*max(4/3,1.4/self.prandtl))
-        return torch.minimum(convective,diffusive[:,None,None])
 
     def loads(self, U):
         cl, cd, pressure = super().loads(U)

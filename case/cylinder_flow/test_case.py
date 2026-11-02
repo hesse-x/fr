@@ -11,6 +11,7 @@ import torch
 
 sys.path.insert(0,str(Path(__file__).resolve().parent))
 from cylinder import module
+from tests.compressible_reference import CompressibleReference
 from native import NativeCylinder
 from generate_mesh import geometry
 from fr.gmsh import generate_mesh
@@ -28,7 +29,7 @@ class CylinderTests(unittest.TestCase):
         mesh = generate_mesh(geo,geo.with_suffix('.msh'),order=3)
         cls.mesh = mesh
         cls.model = NativeCylinder(mesh)
-        cls.reference = module.Airfoil(mesh,reynolds=100.)
+        cls.reference = CompressibleReference(module.Airfoil(mesh,reynolds=100.))
         geo=Path(cls.tmp.name)/'structured.geo'
         geo.write_text(structured_geometry(radius=3,downstream=4,box=1.5,
             circumferential=4,radial=3,upstream_cells=4,downstream_cells=8,outer_cells=4))
@@ -96,7 +97,7 @@ class CylinderTests(unittest.TestCase):
     def test_native_orders_and_oblique_freestream(self):
         for p in (1,3):
             a=NativeCylinder(self.mesh,p=p,mach=.2,alpha=13.,reynolds=40.)
-            b=module.Airfoil(self.mesh,p=p,mach=.2,alpha=13.,reynolds=40.)
+            b=CompressibleReference(module.Airfoil(self.mesh,p=p,mach=.2,alpha=13.,reynolds=40.))
             U=a.initial_state(); saved=U.clone()
             torch.testing.assert_close(a.rhs(U),b.rhs(U),rtol=1e-9,atol=1e-9)
             torch.testing.assert_close(U,saved,rtol=0,atol=0)
@@ -127,7 +128,7 @@ class CylinderTests(unittest.TestCase):
     def test_structured_quad_native_operator(self):
         for p in (1,2):
             a=NativeCylinder(self.quad_mesh,p=p,mach=.2,reynolds=100.)
-            b=module.Airfoil(self.quad_mesh,p=p,mach=.2,reynolds=100.)
+            b=CompressibleReference(module.Airfoil(self.quad_mesh,p=p,mach=.2,reynolds=100.))
             self.assertEqual(a.mesh.blocks[0].kind,'quad')
             self.assertGreater(float(a.s.minimum_jacobian),0)
             self.assertAlmostEqual(float(a.s.volume),42-torch.pi/4,delta=1e-5)

@@ -2,7 +2,7 @@
 from dataclasses import dataclass
 import math
 import torch
-from .operators import operators
+from .operators import operators, overintegration
 
 
 @dataclass(frozen=True)
@@ -37,10 +37,15 @@ class CartesianFR:
     Optional edges supplies one increasing cell-edge array per axis (None
     selects uniform edges). Local derivatives, quadrature and CFL use widths;
     h retains mean widths for compatibility with existing uniform-grid cases.
+    anti_alias selects 'none' (default), 'flux', 'surf-flux', or their
+    comma-separated combination. Gauss overintegration and L2 projection
+    leave solution DOFs unchanged. quadrature_order is the Gauss point count
+    per direction (default ceil((3*p+1)/2)); sources are not dealiased.
     """
     def __init__(self, cells, bounds, p=3, *, flux, numerical_flux=None,
                  flux_pair=None, face_flux=None, boundary=None, periodic=False,
-                 speed=None, source=None, device='cpu', edges=None):
+                 speed=None, source=None, device='cpu', edges=None,
+                 anti_alias='none', quadrature_order=None):
         self.cells = tuple(cells)
         self.bounds = tuple(tuple(b) for b in bounds)
         self.dim, self.p, self.device = len(self.cells), p, device
@@ -62,6 +67,21 @@ class CartesianFR:
         self.numerical_flux = numerical_flux if numerical_flux is not None else lambda m,p,a: flux_pair(m.flux,p.flux)
         self.boundary, self.speed, self.source = boundary, speed, source
         self.z,self.w,self.D,self.L,self.R,self.gl,self.gr = operators(p,device)
+        if not isinstance(anti_alias, str):
+            raise ValueError('anti_alias must be none, flux, surf-flux, or flux, surf-flux')
+        options = {s.strip() for s in anti_alias.split(',')}
+        if options == {'none'}:
+            options = set()
+        if not options <= {'flux', 'surf-flux'}:
+            raise ValueError('unknown anti_alias option')
+        self.anti_alias = frozenset(options)
+        # Integrate quadratic flux times a degree-p test function exactly.
+        nq = (3*p+2)//2 if quadrature_order is None else quadrature_order
+        if not isinstance(nq, int) or nq < p+1:
+            raise ValueError('quadrature_order must be an integer at least p+1')
+        self.quadrature_order = nq
+        if options:
+            self.qz,self.qw,self.interpolation,self.projection = overintegration(p,nq,device)
         self.h = tuple((b-a)/n for n,(a,b) in zip(self.cells,self.bounds))
         if edges is not None and len(edges) != self.dim:
             raise ValueError('one edge array per direction required')
@@ -135,28 +155,49 @@ class CartesianFR:
     def _face(self,U,axis,coords=None):
         return Face(U,self.face_flux(U,axis),coords)
 
+    @staticmethod
+    def _tensor_map(A, matrix, axes):
+        for axis in axes:
+            A = (A.movedim(axis,-1) @ matrix.T).movedim(-1,axis)
+        return A
+
     def rhs(self,U,t=0.):
         if U.ndim != 2*self.dim+1 or tuple(U.shape[:-1]) != self.shape:
             raise ValueError(f'expected state shape {self.shape} + (variables,)')
         out=torch.zeros_like(U)
+        volume_aa = 'flux' in self.anti_alias
+        surface_aa = 'surf-flux' in self.anti_alias and self.dim > 1
+        Q = self._tensor_map(U,self.interpolation,range(self.dim,2*self.dim)) if volume_aa else None
         for axis,h in enumerate(self.h):
             perm=self._permutation(axis)
             A=U.permute(perm)
-            F=self.flux(A,axis)
+            if volume_aa:
+                Fq=self.flux(Q.permute(perm),axis)
+                F=self._tensor_map(Fq,self.projection,range(self.dim,2*self.dim))
+            else:
+                F=self.flux(A,axis)
             ul,ur=self._trace(A,self.L),self._trace(A,self.R)
             fl,fr=self._trace(F,self.L),self._trace(F,self.R)
             cl,cr=self.trace_coords[axis]
+            if surface_aa:
+                face_axes=range(self.dim,2*self.dim-1)
+                ul=self._tensor_map(ul,self.interpolation,face_axes)
+                ur=self._tensor_map(ur,self.interpolation,face_axes)
+                cl=tuple(self._tensor_map(x,self.interpolation,face_axes) for x in cl)
+                cr=tuple(self._tensor_map(x,self.interpolation,face_axes) for x in cr)
             interior=self.numerical_flux(self._face(ur[:-1],axis,tuple(x[:-1] for x in cr)),self._face(ul[1:],axis,tuple(x[1:] for x in cl)),axis)
             if self.periodic[axis]:
                 seam=self.numerical_flux(self._face(ur[-1],axis,tuple(x[-1] for x in cr)),self._face(ul[0],axis,tuple(x[0] for x in cl)),axis)
                 left,right=seam,seam
             else:
-                coords_l,coords_r=self.face_coords[axis]
+                coords_l,coords_r=(tuple(x[0] for x in cl),tuple(x[-1] for x in cr)) if surface_aa else self.face_coords[axis]
                 exterior_l=self.boundary(coords_l,ul[0],axis,-1,t)
                 exterior_r=self.boundary(coords_r,ur[-1],axis,1,t)
                 left=self.numerical_flux(self._face(exterior_l,axis,coords_l),self._face(ul[0],axis,coords_l),axis)
                 right=self.numerical_flux(self._face(ur[-1],axis,coords_r),self._face(exterior_r,axis,coords_r),axis)
             common=torch.cat((left[None],interior,right[None]),0)
+            if surface_aa:
+                common=self._tensor_map(common,self.projection,face_axes)
             deriv=(F.movedim(self.dim,-1)@self.D.T).movedim(-1,self.dim)
             shape=[1]*A.ndim
             shape[self.dim]=self.p+1

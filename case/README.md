@@ -65,6 +65,7 @@ Mie 的相量幅值使用原有末尾周期采样结果，不能由单个瞬时�
   BR1 原始变量边界迹和跳量。物理标签由算例映射，不能用于内部面。
   壁面通量、热流等模型专用处理仍由空间离散实现负责。
 
-圆柱和天线 native 已使用这些头文件；channel-dns 的融合 native 推进复用
+NACA0012、圆柱和天线 native 已使用这些头文件；NACA0012 和圆柱共享
+`fr/native/compressible.cpp` 的 Euler/BR1 NS 算子。channel-dns 的融合 native 推进复用
 Python 阶段表，保留其 SIMD、源项和局部残差输出路径。编译缓存必须把
 `fr.native.header_bytes()` 纳入摘要，以便公共头文件修改后重新构建。

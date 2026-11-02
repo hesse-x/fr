@@ -1,6 +1,24 @@
 """Reference-element FR operators."""
 import torch
 
+
+def overintegration(p, n, device='cpu'):
+    """Gauss interpolation and discrete L2 projection, exact mass for P_p."""
+    z = operators(p, device)[0]
+    q, qw = operators(n-1, device)[:2]
+    def legendre(x):
+        values = [torch.ones_like(x)]
+        if p:
+            values.append(x)
+        for k in range(1, p):
+            values.append(((2*k+1)*x*values[-1]-k*values[-2])/(k+1))
+        return torch.stack(values, -1)
+    V, Vq = legendre(z), legendre(q)
+    interpolation = torch.linalg.solve(V.T, Vq.T).T
+    inverse_mass = (2*torch.arange(p+1, device=device, dtype=z.dtype)+1)/2
+    projection = (V*inverse_mass) @ (Vq.T*qw)
+    return q, qw, interpolation, projection
+
 def operators(p, device):
     """Gauss nodes/weights via Golub-Welsch; Radau derivatives via DG lifting."""
     k = torch.arange(1, p+1, dtype=torch.float64, device=device)

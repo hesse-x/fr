@@ -18,7 +18,7 @@ class NavierStokesTests(unittest.TestCase):
         torch.set_default_dtype(torch.float64); torch.set_num_threads(1)
         cls.tmp=tempfile.TemporaryDirectory()
         geo=Path(cls.tmp.name)/'mesh.geo'; mesh=geo.with_suffix('.msh')
-        geo.write_text(geometry(5,.08,3,5)); generate_mesh(geo,mesh,order=3)
+        geo.write_text(geometry(radius=5.,downstream=5.,surface_cells=6,radial=5,downstream_cells=10,outer_cells=6)); generate_mesh(geo,mesh,order=3)
         cls.a=Airfoil(mesh)
 
     @classmethod

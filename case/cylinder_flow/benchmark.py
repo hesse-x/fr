@@ -10,6 +10,7 @@ import time
 
 import torch
 from cylinder import module
+from tests.compressible_reference import CompressibleReference
 from native import NativeCylinder
 
 
@@ -27,7 +28,7 @@ def main():
         parser.error('positive threads, steps and repeats; nonnegative warmup required')
     torch.set_default_dtype(torch.float64); torch.set_num_threads(args.threads)
     optimized = NativeCylinder(args.mesh)
-    reference = module.Airfoil(args.mesh,reynolds=100.)
+    reference = CompressibleReference(module.Airfoil(args.mesh,reynolds=100.))
     initial = optimized.initial_state()
     cfl = initial.new_tensor(.2)
     # Compare the complete native spatial operator before timing RK evolution.

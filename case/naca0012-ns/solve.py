@@ -4,11 +4,11 @@ import csv
 import hashlib
 import json
 import math
-import os
 from pathlib import Path
 import sys
 import time
 import torch
+import importlib.util
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0,str(ROOT))
@@ -19,7 +19,7 @@ from airfoil import Airfoil
 def main(*, observer_factory=None):
     p = argparse.ArgumentParser(description=__doc__)
     base = Path(__file__).parent/'results'
-    p.add_argument('--mesh',type=Path,default=base/'mesh/coarse.msh')
+    p.add_argument('--mesh',type=Path,default=base/'mesh/structured.msh')
     p.add_argument('--output',type=Path,default=base/'alpha0_re1000_coarse')
     p.add_argument('--re',type=float,default=1000.)
     p.add_argument('--mach',type=float,default=.1)
@@ -35,7 +35,6 @@ def main(*, observer_factory=None):
     p.add_argument('--residual-tol',type=float,default=1e-5)
     p.add_argument('--time-mode',choices=['global','local'],default='global')
     p.add_argument('--restart',type=Path)
-    p.add_argument('--compile',action='store_true')
     a = p.parse_args()
     if not (0<a.mach<1 and math.isfinite(a.re) and a.re>0 and math.isfinite(a.alpha)
             and math.isfinite(a.cfl) and a.cfl>0 and math.isfinite(a.time) and a.time>=0
@@ -44,7 +43,13 @@ def main(*, observer_factory=None):
             and a.p>=1 and a.quadrature>=a.p+1 and a.max_steps>=0 and a.output_every>0 and a.threads>0):
         p.error('invalid physical or numerical parameters')
     torch.set_default_dtype(torch.float64); torch.set_num_threads(a.threads)
-    physics = Airfoil(a.mesh,a.p,a.mach,a.alpha,a.quadrature,reynolds=a.re,viscous_step_factor=a.viscous_step_factor)
+    physics_class=Airfoil
+    # Cylinder supplies its own native subclass to this shared driver.
+    if not getattr(physics_class,'native_backend',False):
+        spec=importlib.util.spec_from_file_location('naca_ns_native',Path(__file__).with_name('native.py'))
+        native=importlib.util.module_from_spec(spec); spec.loader.exec_module(native)
+        physics_class=native.NativeAirfoil
+    physics = physics_class(a.mesh,a.p,a.mach,a.alpha,a.quadrature,reynolds=a.re,viscous_step_factor=a.viscous_step_factor)
     s = physics.s
     U = physics.initial_state() if hasattr(physics, 'initial_state') else physics.far.expand(s.ndof,4).clone()
     mesh_hash=hashlib.sha256(a.mesh.read_bytes()).hexdigest()
@@ -59,11 +64,7 @@ def main(*, observer_factory=None):
         U=checkpoint['U'].clone(); t=old['pseudo_time_min']; step=old['steps']; history=checkpoint['history']
     if not physics.valid(U): raise ValueError('invalid initial state')
     rhs=physics.rhs
-    if a.compile and not getattr(physics,'native_backend',False):
-        os.environ.setdefault('TORCHINDUCTOR_CACHE_DIR','/tmp/fr-ns-steady-inductor')
-        os.environ.setdefault('TORCHINDUCTOR_COMPILE_THREADS','2')
-        rhs=torch.compile(rhs,fullgraph=True)
-    advance=physics.make_step_with_rhs(a.time_mode,compile=a.compile)
+    advance=physics.make_step_with_rhs(a.time_mode)
     start=time.monotonic(); residual=math.inf; cfl=a.cfl
     # Keep the RHS of exactly U: it serves both logging and RK stage one.
     F=rhs(U)

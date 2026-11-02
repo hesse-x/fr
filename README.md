@@ -11,7 +11,7 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-`requirements.txt` 统一包含数值计算、绘图和声学后处理依赖；自动生成网格另需安装 `gmsh` 命令行程序。圆柱算例的原生算子还需要支持 C++20/OpenMP 的 C++ 编译器。
+`requirements.txt` 统一包含数值计算、绘图和声学后处理依赖；自动生成网格另需安装 `gmsh` 命令行程序。NACA0012 与圆柱算例的共享原生算子还需要支持 C++20/OpenMP 的 C++ 编译器。
 
 - [框架设计与API](doc/framework.md)
 - [算例通用运行与可视化约定](case/README.md)
@@ -35,8 +35,8 @@ pip install -r requirements.txt
 | [case/mie_cylinder.py](case/mie_cylinder.py) | 贴体介电圆柱TMz电磁散射与圆柱级数参考对照 | [README](case/mie_cylinder/README.md) |
 | [case/schrodinger.py](case/schrodinger.py) | 自由波包、谐振子、无限深势阱、有限势垒和二维双缝 | [README](case/schrodinger/README.md) |
 | [case/double_slit_accuracy.py](case/double_slit_accuracy.py) | 双缝条纹、透射概率和对比度的独立精度对照 | [README](case/double_slit_accuracy/README.md) |
-| [case/naca0012-euler/](case/naca0012-euler/) | NACA0012翼型无黏Euler绕流 | [README](case/naca0012-euler/README.md) |
-| [case/naca0012-ns/](case/naca0012-ns/) | NACA0012翼型黏性Navier–Stokes绕流 | [README](case/naca0012-ns/README.md) |
+| [case/naca0012-euler/](case/naca0012-euler/) | NACA0012无黏Euler绕流，结构四边形、native、体/面过积分及1°载荷结果 | [README](case/naca0012-euler/README.md) |
+| [case/naca0012-ns/](case/naca0012-ns/) | NACA0012层流NS绕流，结构四边形、无滑移绝热壁及1°的CL/CD、Cp/Cf分布 | [README](case/naca0012-ns/README.md) |
 | [case/cylinder_flow/](case/cylinder_flow/) | 二维圆柱层流绕流，默认 Re=100 非定常计算 | [README](case/cylinder_flow/README.md) |
 | [case/channel-dns/](case/channel-dns/) | 恒质量流量三维槽道湍流、扰动发展及平均场统计 | [README](case/channel-dns/README.md) |
 

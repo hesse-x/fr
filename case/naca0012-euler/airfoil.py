@@ -1,4 +1,4 @@
-"""Airfoil Euler FR-DG physics with explicit global or local time stepping."""
+"""Current NACA geometry, physical boundaries and pressure-load postprocessing."""
 import math
 import torch
 from fr.boundaries import euler_characteristic, euler_slip_wall
@@ -23,7 +23,7 @@ class Airfoil:
         self.wall=self.mesh.boundary & (self.mesh.face_tags==2)
         self.wall_ids=torch.where(self.wall)[0]
         self.outer_ids=torch.where(self.mesh.boundary & (self.mesh.face_tags==1))[0]
-        if len(self.s.blocks)!=1: raise ValueError('airfoil run expects homogeneous triangles')
+        if len(self.s.blocks)!=1: raise ValueError('airfoil run expects homogeneous triangles or quadrilaterals')
         s=self.s; b=s.blocks[0]
         inv=torch.linalg.inv(b['mass'])
         self.Gx=inv@b['Gx']; self.Gy=inv@b['Gy']
@@ -51,15 +51,6 @@ class Airfoil:
         wallflux[...,1:3]=self.wall_pressure(L.state,n)[...,None]*n
         return torch.where((L.tag==2)[...,None],wallflux,F)
 
-    @staticmethod
-    def flux_xy(U):
-        rho=U[...,0]; u=U[...,1]/rho; v=U[...,2]/rho
-        p=.4*(U[...,3]-.5*(U[...,1]*u+U[...,2]*v))
-        z=torch.zeros_like(p)
-        Fx=U*u[...,None]+torch.stack((z,p,z,p*u),-1)
-        Fy=U*v[...,None]+torch.stack((z,z,p,p*v),-1)
-        return Fx,Fy
-
     def wall_pressure(self,U,n):
         # Exact algebraic form of Rusanov with reflected normal momentum.
         # Includes acoustic impedance damping absent from a central p*n wall.
@@ -69,6 +60,7 @@ class Airfoil:
         return p+rho*un**2+rho*speed*un
 
     def common(self,L,R):
+        """Boundary-consistent face flux for current FW-H sampling."""
         s=self.s; R=R.clone()
         R[self.outer_ids]=self.boundary(None,L[self.outer_ids],s.normals[self.outer_ids],1,0.)
         n=s.normals
@@ -88,28 +80,6 @@ class Airfoil:
         F[self.wall_ids]=torch.stack((z,pressure*wn[...,0],pressure*wn[...,1],z),-1)
         return F
 
-    def rhs(self,U):
-        s=self.s; b=s.blocks[0]
-        V=U.reshape(b['ne'],b['ns'],4)
-        Q=b['B']@V
-        fx,fy=self.flux_xy(Q)
-        L=s._states(U)
-        R=s.neighbor_states(L)
-        common=self.common(L,R)
-        result=self.Gx@fx+self.Gy@fy+self.lift_matrix@common[b['ids']].reshape(b['ne'],-1,4)
-        return result.reshape(-1,4)
-
-    def local_dt(self,U,cfl):
-        b=self.s.blocks[0]
-        rho,vel,p=self.eq.primitive(b['B']@U.reshape(b['ne'],b['ns'],4))
-        speed=(vel.norm(dim=-1)+(1.4*p/rho).sqrt()).amax(1)
-        return (cfl*self.base_step/speed)[:,None,None]
-
-    def valid(self,U):
-        if not self.eq.valid(U): return False
-        if not self.eq.valid(self.s._states(U)): return False
-        return all(self.eq.valid(b['B']@U[b['offset']].reshape(b['ne'],b['ns'],4)) for b in self.s.blocks)
-
     def loads(self,U):
         s=self.s; ids=self.wall_ids
         # Loads need only wall traces, not interpolation on every mesh face.
@@ -121,27 +91,3 @@ class Airfoil:
         cd=float(force@self.direction)
         cl=float(force@torch.stack((-self.direction[1],self.direction[0])))
         return cl,cd,p
-
-    def rk4(self,U,dt,rhs=None):
-        f=self.rhs if rhs is None else rhs
-        V=U.reshape(-1,self.s.blocks[0]['ns'],4)
-        def g(X):return f(X.reshape_as(U)).reshape_as(V)
-        k1=g(V); k2=g(V+.5*dt*k1); k3=g(V+.5*dt*k2); k4=g(V+dt*k3)
-        return (V+dt/6*(k1+2*k2+2*k3+k4)).reshape_as(U)
-
-    def ssprk43(self,U,dt,rhs=None):
-        from fr.time import ssprk43
-        f=self.rhs if rhs is None else rhs
-        V=U.reshape(-1,self.s.blocks[0]['ns'],4)
-        return ssprk43(lambda X,t:f(X.reshape_as(U)).reshape_as(V),V,0.,dt).reshape_as(U)
-
-    def make_step(self,method='ssprk43',time_mode='global',*,compile=False):
-        """Build one adaptive RK step; CFL stays a scalar tensor across calls."""
-        if method not in ('ssprk43','rk4') or time_mode not in ('global','local'):
-            raise ValueError('unknown RK method or time mode')
-        advance=getattr(self,method)
-        def step(U,cfl):
-            dt=self.local_dt(U,cfl)
-            if time_mode=='global':dt=dt.amin().expand_as(dt)
-            return advance(U,dt),dt
-        return torch.compile(step,fullgraph=True) if compile else step

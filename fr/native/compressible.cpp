@@ -1,0 +1,388 @@
+// Shared CPU FP64 curved-element Euler / BR1 Navier--Stokes.
+// ATen owns every buffer; no raw-pointer Python ABI or external state.
+#include <ATen/ATen.h>
+#include <ATen/Parallel.h>
+#include <torch/library.h>
+#include <algorithm>
+#include <cmath>
+#include <limits>
+#include <vector>
+#include "time.hpp"
+#include "boundaries.hpp"
+
+namespace {
+using at::Tensor;
+using Tensors = c10::List<Tensor>;
+
+struct Plan {
+  int64_t ne, ns, nq, nf, faces, edges;
+  const double *B, *FB, *gx, *gy, *lift, *normal, *penalty, *far;
+  const double *base, *h, *weight;
+  const int64_t *ids, *neighbor, *tag;
+  double mu, heat, diff;
+  Plan(const Tensor& u, const Tensors& d, double viscosity, double pr,
+       double diffusion): mu(viscosity), heat(viscosity*3.5/pr), diff(diffusion) {
+    TORCH_CHECK(std::isfinite(viscosity) && viscosity>=0 && std::isfinite(pr) && pr>0, "invalid viscosity or Prandtl number");
+    TORCH_CHECK(d.size()==14, "expected 14 mesh tensors");
+    TORCH_CHECK(u.device().is_cpu() && u.scalar_type()==at::kDouble &&
+                u.is_contiguous() && u.dim()==2 && u.size(1)==4,
+                "state must be contiguous CPU float64 (ndof,4)");
+    for (int i=0;i<14;++i) {
+      auto t=d.get(i);
+      TORCH_CHECK(t.device().is_cpu() && t.is_contiguous(), "mesh tensors must be contiguous CPU tensors");
+      TORCH_CHECK(t.scalar_type()==((i>=9 && i<=11)?at::kLong:at::kDouble), "invalid mesh dtype");
+    }
+    auto b=d.get(0), f=d.get(1), g=d.get(2), n=d.get(5);
+    TORCH_CHECK(b.dim()==2 && f.dim()==3 && g.dim()==3 && n.dim()==3, "invalid mesh ranks");
+    ne=g.size(0); ns=b.size(1); nq=b.size(0); nf=f.size(1); faces=n.size(0); edges=f.size(0);
+    TORCH_CHECK(ne>0 && ns>0 && nq>0 && nf>0 && (edges==3 || edges==4) && f.size(2)==ns &&
+                g.size(1)==ns && g.size(2)==nq && n.size(1)==nf && n.size(2)==2 &&
+                u.size(0)==ne*ns, "incompatible mesh dimensions");
+    auto shape=[&](int i,std::initializer_list<int64_t> sizes) {
+      TORCH_CHECK(d.get(i).sizes()==at::IntArrayRef(sizes), "invalid mesh shape at index ",i);
+    };
+    shape(3,{ne,ns,nq}); shape(4,{ne,ns,edges*nf}); shape(6,{faces,nf});
+    shape(7,{4}); shape(8,{ne}); shape(9,{ne,edges}); shape(10,{faces,nf});
+    shape(11,{faces}); shape(12,{ne}); shape(13,{ne,nq});
+    B=b.const_data_ptr<double>(); FB=f.const_data_ptr<double>();
+    gx=g.const_data_ptr<double>(); gy=d.get(3).const_data_ptr<double>();
+    lift=d.get(4).const_data_ptr<double>(); normal=n.const_data_ptr<double>();
+    penalty=d.get(6).const_data_ptr<double>(); far=d.get(7).const_data_ptr<double>();
+    base=d.get(8).const_data_ptr<double>(); ids=d.get(9).const_data_ptr<int64_t>();
+    neighbor=d.get(10).const_data_ptr<int64_t>(); tag=d.get(11).const_data_ptr<int64_t>();
+    h=d.get(12).const_data_ptr<double>(); weight=d.get(13).const_data_ptr<double>();
+  }
+};
+
+inline void primitive(const double* u,double* w) {
+  w[0]=u[1]/u[0]; w[1]=u[2]/u[0];
+  w[2]=.4*(u[3]-.5*(u[1]*w[0]+u[2]*w[1]))/u[0];
+}
+inline double pressure(const double* u) {
+  return .4*(u[3]-.5*(u[1]*u[1]+u[2]*u[2])/u[0]);
+}
+inline bool positive(const double* u) {
+  return std::isfinite(u[0]) && std::isfinite(u[1]) && std::isfinite(u[2]) &&
+         std::isfinite(u[3]) && u[0]>0 && pressure(u)>0;
+}
+inline void stress(const double* g,double mu,double& xx,double& xy,double& yy) {
+  double div=(2./3)*(g[0]+g[3]);
+  xx=mu*(2*g[0]-div); xy=mu*(g[1]+g[2]); yy=mu*(2*g[3]-div);
+}
+inline void viscous_normal(const double* w,const double* g,double nx,double ny,
+                           const Plan& p,double* f) {
+  double xx,xy,yy; stress(g,p.mu,xx,xy,yy);
+  f[0]=0; f[1]=xx*nx+xy*ny; f[2]=xy*nx+yy*ny;
+  f[3]=w[0]*f[1]+w[1]*f[2]+p.heat*(g[4]*nx+g[5]*ny);
+}
+inline double euler_normal(const double* u,double nx,double ny,double* f) {
+  double pr=pressure(u), un=(u[1]*nx+u[2]*ny)/u[0];
+  for(int v=0;v<4;++v) f[v]=u[v]*un;
+  f[1]+=pr*nx; f[2]+=pr*ny; f[3]+=pr*un;
+  return std::abs(un)+std::sqrt(1.4*pr/u[0]);
+}
+
+struct Workspace {
+  Tensor w,l,wl,g,gl;
+  Workspace(const Plan& p,const Tensor& u,const Tensors& buffers) {
+    TORCH_CHECK(buffers.size()==5,"expected five workspace tensors");
+    int64_t count[5]={p.mu>0?p.ne*p.ns*3:0,p.faces*p.nf*4,
+                     p.mu>0?p.faces*p.nf*3:0,p.mu>0?p.ne*p.ns*6:0,
+                     p.mu>0?p.faces*p.nf*6:0};
+    for(int i=0;i<5;++i) {
+      const auto& t=buffers.get(i);
+      TORCH_CHECK(t.device().is_cpu() && t.scalar_type()==at::kDouble &&
+                  t.is_contiguous() && t.numel()==count[i],"invalid workspace tensor");
+    }
+    w=buffers.get(0); l=buffers.get(1); wl=buffers.get(2);
+    g=buffers.get(3); gl=buffers.get(4);
+  }
+};
+
+template<bool viscous>
+void rhs_kernel_impl(const Tensor& U,Tensor& out,const Plan& p,Workspace& ws) {
+  const double* u=U.const_data_ptr<double>(); double* result=out.mutable_data_ptr<double>();
+  double *w=ws.w.mutable_data_ptr<double>(), *l=ws.l.mutable_data_ptr<double>();
+  double *wl=ws.wl.mutable_data_ptr<double>(), *g=ws.g.mutable_data_ptr<double>();
+  double *gl=ws.gl.mutable_data_ptr<double>();
+  // Own-cell interpolation. All neighbor reads happen after this barrier.
+  at::parallel_for(0,p.ne,16,[&](int64_t begin,int64_t end) {
+    for(int64_t e=begin;e<end;++e) {
+      if constexpr(viscous) for(int64_t i=0;i<p.ns;++i) primitive(u+(e*p.ns+i)*4,w+(e*p.ns+i)*3);
+      for(int f=0;f<p.edges;++f) for(int64_t q=0;q<p.nf;++q) {
+        int64_t k=p.ids[e*p.edges+f]*p.nf+q;
+        std::fill_n(l+k*4,4,0.);
+        if constexpr(viscous) std::fill_n(wl+k*3,3,0.);
+        for(int64_t i=0;i<p.ns;++i) {
+          double b=p.FB[(f*p.nf+q)*p.ns+i];
+          for(int v=0;v<4;++v) l[k*4+v]+=b*u[(e*p.ns+i)*4+v];
+          if constexpr(viscous) for(int v=0;v<3;++v) wl[k*3+v]+=b*w[(e*p.ns+i)*3+v];
+        }
+      }
+    }
+  });
+  // BR1 gradient and its own-cell traces. Scratch is local to each worker.
+  if constexpr(viscous) at::parallel_for(0,p.ne,16,[&](int64_t begin,int64_t end) {
+    std::vector<double> qv(p.nq*3), trace(p.edges*p.nf*3);
+    for(int64_t e=begin;e<end;++e) {
+      std::fill(qv.begin(),qv.end(),0.);
+      for(int64_t q=0;q<p.nq;++q) for(int64_t i=0;i<p.ns;++i)
+        for(int v=0;v<3;++v) qv[q*3+v]+=p.B[q*p.ns+i]*w[(e*p.ns+i)*3+v];
+      for(int f=0;f<p.edges;++f) for(int64_t q=0;q<p.nf;++q) {
+        int64_t face=p.ids[e*p.edges+f], k=face*p.nf+q, other=p.neighbor[k];
+        for(int v=0;v<3;++v) {
+          double t=fr_boundary::primitive_trace(wl[k*3+v],wl[other*3+v],
+              v<2?p.far[v+1]:1/1.4,v,p.tag[face]==2,p.tag[face]==1);
+          trace[(f*p.nf+q)*3+v]=t;
+        }
+      }
+      for(int64_t i=0;i<p.ns;++i) for(int v=0;v<3;++v) for(int a=0;a<2;++a) {
+        double value=0; const double* D=a==0?p.gx:p.gy;
+        for(int64_t q=0;q<p.nq;++q) value-=D[(e*p.ns+i)*p.nq+q]*qv[q*3+v];
+        for(int f=0;f<p.edges;++f) for(int64_t q=0;q<p.nf;++q) {
+          int64_t k=p.ids[e*p.edges+f]*p.nf+q;
+          value-=p.lift[(e*p.ns+i)*p.edges*p.nf+f*p.nf+q]*trace[(f*p.nf+q)*3+v]*p.normal[k*2+a];
+        }
+        g[(e*p.ns+i)*6+v*2+a]=value;
+      }
+      for(int f=0;f<p.edges;++f) for(int64_t q=0;q<p.nf;++q) {
+        int64_t k=p.ids[e*p.edges+f]*p.nf+q;
+        std::fill_n(gl+k*6,6,0.);
+        for(int64_t i=0;i<p.ns;++i) for(int v=0;v<6;++v)
+          gl[k*6+v]+=p.FB[(f*p.nf+q)*p.ns+i]*g[(e*p.ns+i)*6+v];
+      }
+    }
+  });
+  // Volume and face fluxes consumed immediately by the local derivative/lift.
+  at::parallel_for(0,p.ne,16,[&](int64_t begin,int64_t end) {
+    std::vector<double> fx(p.nq*4),fy(p.nq*4),common(p.edges*p.nf*4);
+    for(int64_t e=begin;e<end;++e) {
+      for(int64_t q=0;q<p.nq;++q) {
+        double uq[4]={},wq[3]={},gq[6]={};
+        for(int64_t i=0;i<p.ns;++i) {
+          double b=p.B[q*p.ns+i];
+          for(int v=0;v<4;++v) uq[v]+=b*u[(e*p.ns+i)*4+v];
+          if constexpr(viscous) for(int v=0;v<3;++v) wq[v]+=b*w[(e*p.ns+i)*3+v];
+          if constexpr(viscous) for(int v=0;v<6;++v) gq[v]+=b*g[(e*p.ns+i)*6+v];
+        }
+        euler_normal(uq,1,0,fx.data()+q*4); euler_normal(uq,0,1,fy.data()+q*4);
+        if constexpr(viscous) {
+        double vx[4],vy[4]; viscous_normal(wq,gq,1,0,p,vx); viscous_normal(wq,gq,0,1,p,vy);
+        for(int v=0;v<4;++v) {fx[q*4+v]-=vx[v]; fy[q*4+v]-=vy[v];}
+        }
+      }
+      for(int f=0;f<p.edges;++f) for(int64_t q=0;q<p.nf;++q) {
+        int64_t face=p.ids[e*p.edges+f],k=face*p.nf+q,other=p.neighbor[k];
+        double nx=p.normal[k*2],ny=p.normal[k*2+1],r[4],fl[4],fr[4],vl[4],vr[4];
+        std::copy_n(l+other*4,4,r);
+        if(p.tag[face]==1) fr_boundary::euler_characteristic(l+k*4,nx,ny,p.far,r);
+        double speed=std::max(euler_normal(l+k*4,nx,ny,fl),euler_normal(r,nx,ny,fr));
+        double* c=common.data()+(f*p.nf+q)*4;
+        for(int v=0;v<4;++v) c[v]=.5*(fl[v]+fr[v])-speed*.5*(r[v]-l[k*4+v]);
+        if(p.tag[face]==2) {
+          double pr=pressure(l+k*4), un=(l[k*4+1]*nx+l[k*4+2]*ny)/l[k*4];
+          double wp=pr+l[k*4]*un*un+l[k*4]*(std::abs(un)+std::sqrt(1.4*pr/l[k*4]))*un;
+          c[0]=c[3]=0; c[1]=wp*nx; c[2]=wp*ny;
+        }
+        if constexpr(viscous) {
+        viscous_normal(wl+k*3,gl+k*6,nx,ny,p,vl);
+        viscous_normal(wl+other*3,gl+other*6,nx,ny,p,vr);
+        double jump[3];
+        for(int v=0;v<3;++v) {
+          jump[v]=fr_boundary::primitive_jump(wl[k*3+v],wl[other*3+v],
+              v<2?p.far[v+1]:1/1.4,v,p.tag[face]==2,p.tag[face]==1);
+        }
+        double visc[4]; for(int v=0;v<4;++v) visc[v]=.5*(vl[v]+vr[v]);
+        visc[1]+=p.penalty[k]*jump[0]; visc[2]+=p.penalty[k]*jump[1];
+        visc[3]+=p.penalty[k]*(p.heat/p.mu)*jump[2];
+        if(p.tag[face]==2) visc[3]=0.;
+        for(int v=0;v<4;++v) c[v]-=visc[v];
+        }
+      }
+      for(int64_t i=0;i<p.ns;++i) {
+        double value[4]={};
+        // Accumulate independent components together: contiguous four-lane
+        // flux loads, while each component retains its original summation order.
+        for(int64_t q=0;q<p.nq;++q) {
+          const double x=p.gx[(e*p.ns+i)*p.nq+q], y=p.gy[(e*p.ns+i)*p.nq+q];
+          for(int v=0;v<4;++v) value[v]+=x*fx[q*4+v]+y*fy[q*4+v];
+        }
+        for(int64_t f=0;f<p.edges*p.nf;++f) {
+          const double b=p.lift[(e*p.ns+i)*p.edges*p.nf+f];
+          for(int v=0;v<4;++v) value[v]+=b*common[f*4+v];
+        }
+        for(int v=0;v<4;++v) result[(e*p.ns+i)*4+v]=value[v];
+      }
+    }
+  });
+}
+
+void rhs_kernel(const Tensor& u,Tensor& out,const Plan& p,Workspace& ws) {
+  if(p.mu>0) rhs_kernel_impl<true>(u,out,p,ws);
+  else rhs_kernel_impl<false>(u,out,p,ws);
+}
+
+Tensor rhs_cached(const Tensor& u,const Tensors& data,double mu,double pr,double diffusion,const Tensors& buffers) {
+  Plan p(u,data,mu,pr,diffusion); Workspace ws(p,u,buffers); auto out=at::empty_like(u);
+  rhs_kernel(u,out,p,ws); return out;
+}
+
+Tensor timestep(const Tensor& U,const Plan& p,double cfl,bool local,const Tensor* scan=nullptr) {
+  auto dt=at::empty({p.ne,1,1},U.options()); auto d=dt.mutable_data_ptr<double>();
+  auto u=U.const_data_ptr<double>();
+  at::parallel_for(0,p.ne,16,[&](int64_t begin,int64_t end) {
+    for(int64_t e=begin;e<end;++e) {
+      double speed=0,rho=INFINITY;
+      if(scan) {
+        const double* values=scan->const_data_ptr<double>();
+        speed=values[e*2]; rho=values[e*2+1];
+      } else for(int64_t q=0;q<p.nq;++q) {
+        double v[4]={};
+        for(int64_t i=0;i<p.ns;++i) for(int a=0;a<4;++a) v[a]+=p.B[q*p.ns+i]*u[(e*p.ns+i)*4+a];
+        rho=std::min(rho,v[0]);
+        speed=std::max(speed,std::hypot(v[1],v[2])/v[0]+std::sqrt(1.4*pressure(v)/v[0]));
+      }
+      d[e]=std::min(cfl*p.base[e]/speed,cfl*p.diff*p.h[e]*p.h[e]*rho);
+    }
+  });
+  if(!local) {double minimum=*std::min_element(d,d+p.ne); std::fill_n(d,p.ne,minimum);}
+  return dt;
+}
+
+std::tuple<Tensor,Tensor,Tensor> step(const Tensor& u,const Tensor& cfl,const Tensor& first,
+                const Tensors& data,double mu,double pr,double diffusion,bool local,
+                const Tensors& buffers,const Tensor* scan) {
+  Plan p(u,data,mu,pr,diffusion);
+  TORCH_CHECK(first.sizes()==u.sizes() && first.scalar_type()==at::kDouble && first.device().is_cpu() && first.is_contiguous(), "invalid first RHS");
+  TORCH_CHECK(cfl.numel()==1 && cfl.device().is_cpu() && cfl.scalar_type()==at::kDouble, "CFL must be CPU float64 scalar");
+  double cf=cfl.item<double>(); TORCH_CHECK(std::isfinite(cf) && cf>0, "CFL must be positive");
+  Workspace ws(p,u,buffers); auto dt=timestep(u,p,cf,local,scan);
+  auto a=at::empty_like(u),b=at::empty_like(u),f=at::empty_like(u);
+  const double *base=u.const_data_ptr<double>(), *d=dt.const_data_ptr<double>();
+  auto update=[&](Tensor& target,const Tensor& state,const Tensor& force,int stage) {
+    double* out=target.mutable_data_ptr<double>(); const double* v=state.const_data_ptr<double>();
+    const double* r=force.const_data_ptr<double>();
+    at::parallel_for(0,p.ne,16,[&](int64_t begin,int64_t end) {
+      for(int64_t e=begin;e<end;++e) for(int64_t j=e*p.ns*4;j<(e+1)*p.ns*4;++j)
+        out[j]=fr_time::SSPRK43::update(base[j],v[j],r[j],d[e],stage);
+    });
+  };
+  fr_time::ssprk43(
+    [&](int stage) {
+      update(stage%2?b:a,stage==0?u:(stage%2?a:b),stage==0?first:f,stage);
+    },
+    [&](int stage) { rhs_kernel(stage%2?b:a,f,p,ws); });
+  return {b,dt,f};
+}
+// Euler complete step: four RHS evaluations, no unused final-state residual.
+std::tuple<Tensor,Tensor> advance(const Tensor& u,const Tensor& cfl,
+    const Tensors& data,double mu,double pr,double diffusion,bool local,bool rk4,
+    const Tensors& buffers,const Tensor* scan) {
+  Plan p(u,data,mu,pr,diffusion);
+  TORCH_CHECK(cfl.numel()==1 && cfl.device().is_cpu() && cfl.scalar_type()==at::kDouble,
+              "CFL must be CPU float64 scalar");
+  double cf=cfl.item<double>(); TORCH_CHECK(std::isfinite(cf) && cf>0, "CFL must be positive");
+  Workspace ws(p,u,buffers); auto dt=timestep(u,p,cf,local,scan);
+  auto stage=at::empty_like(u), out=at::empty_like(u), f=at::empty_like(u);
+  auto acc=rk4?at::empty_like(u):at::empty({0},u.options());
+  const double* base=u.const_data_ptr<double>(); const double* d=dt.const_data_ptr<double>();
+  for(int s=0;s<4;++s) {
+    rhs_kernel(s?stage:u,f,p,ws);
+    const double* r=f.const_data_ptr<double>();
+    double* target=(s==3?out:stage).mutable_data_ptr<double>();
+    const double* current=s?stage.const_data_ptr<double>():base;
+    double* sum=rk4?acc.mutable_data_ptr<double>():nullptr;
+    at::parallel_for(0,p.ne,16,[&](int64_t begin,int64_t end) {
+      for(int64_t e=begin;e<end;++e) for(int64_t j=e*p.ns*4;j<(e+1)*p.ns*4;++j) {
+        if(rk4) target[j]=fr_time::rk4_update(base[j],r[j],sum[j],s,d[e],
+                          (s==0||s==3)?1.:2.,s==2?d[e]:d[e]/2);
+        else target[j]=fr_time::SSPRK43::update(base[j],current[j],r[j],d[e],s);
+      }
+    });
+  }
+  return {out,dt};
+}
+
+std::tuple<bool,Tensor> scan_state(const Tensor& U,const Tensors& data,double mu,double pr,double diffusion) {
+  Plan p(U,data,mu,pr,diffusion); const double* u=U.const_data_ptr<double>();
+  auto flags=at::empty({p.ne},U.options().dtype(at::kByte));
+  auto flag=flags.mutable_data_ptr<uint8_t>();
+  auto scan=at::empty({p.ne,2},U.options()); auto values=scan.mutable_data_ptr<double>();
+  at::parallel_for(0,p.ne,16,[&](int64_t begin,int64_t end) {
+    for(int64_t e=begin;e<end;++e) {
+      bool ok=true;
+      double speed=0,rho=INFINITY;
+      for(int64_t i=0;i<p.ns;++i) ok=ok && positive(u+(e*p.ns+i)*4);
+      for(int64_t q=0;q<p.nq;++q) {
+        double v[4]={};
+        for(int64_t i=0;i<p.ns;++i) for(int a=0;a<4;++a) v[a]+=p.B[q*p.ns+i]*u[(e*p.ns+i)*4+a];
+        ok=ok && positive(v);
+        rho=std::min(rho,v[0]);
+        speed=std::max(speed,std::hypot(v[1],v[2])/v[0]+std::sqrt(1.4*pressure(v)/v[0]));
+      }
+      for(int f=0;f<p.edges;++f) for(int64_t q=0;q<p.nf;++q) {
+        double v[4]={};
+        for(int64_t i=0;i<p.ns;++i) for(int a=0;a<4;++a) v[a]+=p.FB[(f*p.nf+q)*p.ns+i]*u[(e*p.ns+i)*4+a];
+        ok=ok && positive(v);
+      }
+      flag[e]=ok;
+      values[e*2]=speed; values[e*2+1]=rho;
+    }
+  });
+  return {std::all_of(flag,flag+p.ne,[](uint8_t b){return b!=0;}),scan};
+}
+
+void check_scan(const Tensor& scan,const Tensor& U,const Tensors& data) {
+  TORCH_CHECK(scan.device().is_cpu() && scan.scalar_type()==at::kDouble &&
+              scan.is_contiguous() && scan.dim()==2 && scan.size(0)==data.get(2).size(0) &&
+              scan.size(1)==2,"invalid cached scan");
+}
+
+std::tuple<Tensor,Tensor,Tensor> step_cached(const Tensor& u,const Tensor& cfl,const Tensor& first,
+    const Tensors& data,double mu,double pr,double diffusion,bool local,const Tensors& buffers,
+    const std::optional<Tensor>& scan) {
+  if(scan) check_scan(*scan,u,data);
+  return step(u,cfl,first,data,mu,pr,diffusion,local,buffers,scan?&*scan:nullptr);
+}
+
+std::tuple<Tensor,Tensor> advance_cached(const Tensor& u,const Tensor& cfl,const Tensors& data,
+    double mu,double pr,double diffusion,bool local,bool rk4,const Tensors& buffers,
+    const std::optional<Tensor>& scan) {
+  if(scan) check_scan(*scan,u,data);
+  return advance(u,cfl,data,mu,pr,diffusion,local,rk4,buffers,scan?&*scan:nullptr);
+}
+
+double residual_norm(const Tensor& F,const Tensors& data,double mu,double pr,double diffusion) {
+  Plan p(F,data,mu,pr,diffusion); auto f=F.const_data_ptr<double>();
+  auto sums=at::zeros({p.ne,5},F.options()); auto sum=sums.mutable_data_ptr<double>();
+  at::parallel_for(0,p.ne,16,[&](int64_t begin,int64_t end) {
+    for(int64_t e=begin;e<end;++e) for(int64_t q=0;q<p.nq;++q) {
+      double value[4]={},w=p.weight[e*p.nq+q];
+      for(int64_t i=0;i<p.ns;++i) for(int v=0;v<4;++v) value[v]+=p.B[q*p.ns+i]*f[(e*p.ns+i)*4+v];
+      for(int v=0;v<4;++v) sum[e*5+v]+=value[v]*value[v]*w;
+      sum[e*5+4]+=w;
+    }
+  });
+  double total[5]={};
+  for(int64_t e=0;e<p.ne;++e) for(int v=0;v<5;++v) total[v]+=sum[e*5+v];
+  double result=0;
+  for(int v=0;v<4;++v) {
+    if(!std::isfinite(total[v])) return std::numeric_limits<double>::quiet_NaN();
+    result=std::max(result,std::sqrt(total[v]/total[4]));
+  }
+  return result;
+}
+} // namespace
+
+TORCH_LIBRARY(cylinder_flow, m) {
+  m.def("rhs_cached(Tensor u, Tensor[] data, float mu, float pr, float diffusion, Tensor(a!)[] buffers) -> Tensor");
+  m.def("step_cached(Tensor u, Tensor cfl, Tensor first_rhs, Tensor[] data, float mu, float pr, float diffusion, bool local, Tensor(a!)[] buffers, Tensor? scan) -> (Tensor, Tensor, Tensor)");
+  m.def("advance_cached(Tensor u, Tensor cfl, Tensor[] data, float mu, float pr, float diffusion, bool local, bool rk4, Tensor(a!)[] buffers, Tensor? scan) -> (Tensor, Tensor)");
+  m.def("scan_state(Tensor u, Tensor[] data, float mu, float pr, float diffusion) -> (bool, Tensor)");
+  m.def("residual_norm(Tensor u, Tensor[] data, float mu, float pr, float diffusion) -> float");
+}
+TORCH_LIBRARY_IMPL(cylinder_flow, CPU, m) {
+  m.impl("residual_norm",residual_norm);
+  m.impl("rhs_cached",rhs_cached); m.impl("step_cached",step_cached);
+  m.impl("advance_cached",advance_cached); m.impl("scan_state",scan_state);
+}
