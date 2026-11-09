@@ -38,12 +38,12 @@ class NativeParabolicTests(unittest.TestCase):
         torch.testing.assert_close(actual, reference, rtol=4e-13, atol=4e-12)
         self.assertEqual(actual[case.solid_nodes.expand(case.shape)].abs().max().item(), 0.)
 
-    def test_openmp_matches_serial_and_rejects_wrong_layout(self):
+    def test_aten_matches_serial_and_rejects_wrong_layout(self):
         case = ParabolicAntennaCase(refinement=1)
         state = torch.randn_like(case.initial).masked_fill(case.solid_nodes[..., None], 0.)
         serial = case.native.step(None, state, .3, .005)
         torch.set_num_threads(2)
-        parallel = NativeMaxwell(case)
+        parallel = case.native
         torch.testing.assert_close(parallel.step(None, state, .3, .005), serial, rtol=0., atol=0.)
         with self.assertRaises(ValueError):
             parallel.rhs(state.float(), .3)

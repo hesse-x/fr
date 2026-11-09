@@ -17,7 +17,7 @@ def load_library():
         return _LIBRARY
     source = Path(__file__).with_name('native')/'grouped_ldg.cpp'
     flags = compiler_flags()
-    key = hashlib.sha256(source.read_bytes()+header_bytes()+' '.join(flags).encode()).hexdigest()[:16]
+    key = hashlib.sha256(source.read_bytes()+header_bytes()+torch.__version__.encode()+' '.join(flags).encode()).hexdigest()[:16]
     build = Path('/tmp/fr-channel-native')/key
     build.mkdir(parents=True, exist_ok=True)
     target = build/'grouped_ldg.so'
@@ -31,7 +31,7 @@ def load_library():
     library = ctypes.CDLL(str(target))
     p = ctypes.c_void_p
     library.grouped_ldg.argtypes = [p, p, p, ctypes.c_int64]+[p]*11+[
-        ctypes.c_double]*5+[ctypes.c_int]*5+[p]
+        ctypes.c_double]*5+[ctypes.c_int]*4+[p]
     library.grouped_ldg.restype = None
     library.build_directory = str(build)
     _LIBRARY = library
@@ -125,7 +125,7 @@ class GroupedLDG:
         timing = (ctypes.c_double*5)() if profile else None
         self.library.grouped_ldg(state.data_ptr(), convection.data_ptr(), output.data_ptr(), self.count,
             *(buffer.data_ptr() for buffer in self.buffers), *self.constants,
-            self.groups, self.max_owned, self.max_active, self.max_primitive, torch.get_num_threads(), timing)
+            self.groups, self.max_owned, self.max_active, self.max_primitive, timing)
         if profile:
             return output, dict(zip(('pack_primitive', 'gradient', 'stress_and_heat', 'dual_lifting', 'wall_and_scatter'), timing))
         return output

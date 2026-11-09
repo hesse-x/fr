@@ -4,7 +4,7 @@
 #include <cmath>
 #include <cstdint>
 #include <vector>
-#include <omp.h>
+#include "../../../fr/native/parallel.hpp"
 #include "rk_sink.hpp"
 #include "avx2.hpp"
 using simd::Vec;
@@ -37,7 +37,7 @@ inline void group(const double* input,const double* convection,double* output,in
                     if(neighbor>=0) needed[neighbor]|=1<<axis;
                 }
             }
-            double t=timing ? omp_get_wtime():0;
+            double t=timing ? fr_parallel::wall_time():0;
             for(int e=0;e<nb;++e) {
                 int64_t old=primitive_ids[bs+e];
                 for(int n=0;n<N;n+=4) {
@@ -53,7 +53,7 @@ inline void group(const double* input,const double* convection,double* output,in
                     simd::store(primitive+3*ps+e*N+n,pressure/rho);
                 }
             }
-            if(timing) { pack_total+=omp_get_wtime()-t; t=omp_get_wtime(); }
+            if(timing) { pack_total+=fr_parallel::wall_time()-t; t=fr_parallel::wall_time(); }
             for(int axis=0;axis<3;++axis) for(int e=0;e<na;++e) {
                 const int64_t* meta=active_meta+(as+e)*5;
                 int64_t old=primitive_ids[bs+e];
@@ -83,7 +83,7 @@ inline void group(const double* input,const double* convection,double* output,in
                     }
                 }
             }
-            if(timing) { gradient_total+=omp_get_wtime()-t; t=omp_get_wtime(); }
+            if(timing) { gradient_total+=fr_parallel::wall_time()-t; t=fr_parallel::wall_time(); }
             for(int axis=0;axis<3;++axis) {
                 // Halo gradients are recomputed privately, so no global
                 // gradient/stress arrays or cross-worker synchronization.
@@ -106,7 +106,7 @@ inline void group(const double* input,const double* convection,double* output,in
                         if(axis==1 && e<no) simd::store(wall_work+e*N+n,work);
                     }
                 }
-                if(timing) { flux_total+=omp_get_wtime()-t; t=omp_get_wtime(); }
+                if(timing) { flux_total+=fr_parallel::wall_time()-t; t=fr_parallel::wall_time(); }
                 for(int e=0;e<no;++e) {
                     const int64_t* meta=owned_meta+(os+e)*3;
                     const int64_t* boundary=active_meta+(as+e)*5;
@@ -133,7 +133,7 @@ inline void group(const double* input,const double* convection,double* output,in
                         }
                     }
                 }
-                if(timing) { divergence_total+=omp_get_wtime()-t; t=omp_get_wtime(); }
+                if(timing) { divergence_total+=fr_parallel::wall_time()-t; t=fr_parallel::wall_time(); }
             }
             for(int e=0;e<no;++e) {
                 const int64_t* boundary=active_meta+(as+e)*5;
@@ -165,7 +165,7 @@ inline void group(const double* input,const double* convection,double* output,in
                                          forcing*simd::load(primitive+e*N+n));
                 }
             }
-            if(timing) store_total+=omp_get_wtime()-t;
+            if(timing) store_total+=fr_parallel::wall_time()-t;
     if(timing) { timing[0]+=pack_total; timing[1]+=gradient_total; timing[2]+=flux_total;
                  timing[3]+=divergence_total; timing[4]+=store_total; }
 }

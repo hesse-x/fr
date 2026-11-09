@@ -19,7 +19,7 @@ def load_library():
         return _LIBRARY
     source = Path(__file__).with_name('native')/'step_ops.cpp'
     flags = compiler_flags()
-    key = hashlib.sha256(source.read_bytes()+header_bytes()+' '.join(flags).encode()).hexdigest()[:16]
+    key = hashlib.sha256(source.read_bytes()+header_bytes()+torch.__version__.encode()+' '.join(flags).encode()).hexdigest()[:16]
     build = Path('/tmp/fr-channel-native')/key
     build.mkdir(parents=True, exist_ok=True)
     target = build/'step_ops.so'
@@ -31,17 +31,17 @@ def load_library():
         result.check_returncode()
     lib = ctypes.CDLL(str(target))
     p, i, d, n = ctypes.c_void_p, ctypes.c_int, ctypes.c_double, ctypes.c_int64
-    lib.flux_force.argtypes = [p, p, p, n, i]
+    lib.flux_force.argtypes = [p, p, p, n]
     lib.flux_force.restype = d
-    lib.flux_rk_update.argtypes = [p, p, p, p, n, d, d, i, i]
+    lib.flux_rk_update.argtypes = [p, p, p, p, n, d, d, i]
     lib.flux_rk_update.restype = None
     lib.flux_rk_finalize.argtypes = lib.flux_rk_update.argtypes
     lib.flux_rk_finalize.restype = None
-    lib.state_scan.argtypes = [p, p, n, d, i, p]
+    lib.state_scan.argtypes = [p, p, n, d, p]
     lib.state_scan.restype = None
-    lib.mean_accumulate.argtypes = [p, p, p, n, d, d, i]
+    lib.mean_accumulate.argtypes = [p, p, p, n, d, d]
     lib.mean_accumulate.restype = None
-    lib.flux_rk_finish.argtypes = [p, p, p, p, p, p, n, d, d, i, d, d, i, p]
+    lib.flux_rk_finish.argtypes = [p, p, p, p, p, p, n, d, d, i, d, d, p]
     lib.flux_rk_finish.restype = None
     _LIBRARY = lib
     return lib
@@ -69,7 +69,7 @@ class NativeMeanAccumulator:
                     or not tensor.movedim(-1, 0).is_contiguous()):
                 raise ValueError('expected matching CPU float64 SoA fields')
         self.library.mean_accumulate(previous.data_ptr(), current.data_ptr(), integral.data_ptr(),
-                                     self.count, self.gamma, .5*dt, torch.get_num_threads())
+                                     self.count, self.gamma, .5*dt)
 
 
 class NativeFluxStepper:
@@ -101,7 +101,7 @@ class NativeFluxStepper:
         self.check(state)
         result = (ctypes.c_double*3)()
         self.library.state_scan(state.data_ptr(), self.widths.data_ptr(), self.elements,
-                                self.model.eq.gamma, torch.get_num_threads(), result)
+                                self.model.eq.gamma, result)
         valid = bool(result[2])
         if not valid:
             return False, float('nan')
@@ -115,10 +115,10 @@ class NativeFluxStepper:
         for stage_time, coefficient, combined in ssprk43_stages(t, dt):
             rhs = self.base_rhs(stage, stage_time)
             self.last_force = self.library.flux_force(rhs.data_ptr(), self.weights.data_ptr(),
-                self.scales.data_ptr(), self.elements, torch.get_num_threads())
+                self.scales.data_ptr(), self.elements)
             output = torch.empty_strided(stage.shape, stage.stride(), dtype=stage.dtype)
             arguments = (original.data_ptr(), stage.data_ptr(), rhs.data_ptr(), output.data_ptr(),
-                         self.count, self.last_force, coefficient, int(combined), torch.get_num_threads())
+                         self.count, self.last_force, coefficient, int(combined))
             self.library.flux_rk_update(*arguments)
             stage = output
         return stage
@@ -143,9 +143,9 @@ class NativeLocalRKStepper(NativeFluxStepper):
             output = torch.empty_strided(stage.shape, stage.stride(), dtype=stage.dtype)
             self.plan.rk_stage(original, stage, output, self.pending, coefficient, combined)
             self.last_force = self.library.flux_force(self.pending.data_ptr(), self.weights.data_ptr(),
-                self.scales.data_ptr(), self.elements, torch.get_num_threads())
+                self.scales.data_ptr(), self.elements)
             self.library.flux_rk_finalize(original.data_ptr(), stage.data_ptr(), self.pending.data_ptr(),
-                output.data_ptr(), self.count, self.last_force, coefficient, int(combined), torch.get_num_threads())
+                output.data_ptr(), self.count, self.last_force, coefficient, int(combined))
             stage = output
         return stage
 
@@ -166,18 +166,18 @@ class NativeLocalRKStepper(NativeFluxStepper):
             output = torch.empty_strided(stage.shape, stage.stride(), dtype=stage.dtype)
             self.plan.rk_stage(original, stage, output, self.pending, coefficient, combined)
             self.last_force = self.library.flux_force(self.pending.data_ptr(), self.weights.data_ptr(),
-                self.scales.data_ptr(), self.elements, torch.get_num_threads())
+                self.scales.data_ptr(), self.elements)
             if index == 3:
                 result = (ctypes.c_double*3)()
                 self.library.flux_rk_finish(original.data_ptr(), stage.data_ptr(), self.pending.data_ptr(),
                     output.data_ptr(), self.widths.data_ptr(), integral.data_ptr() if integral is not None else None,
                     self.elements, self.last_force, coefficient, int(combined), self.model.eq.gamma,
-                    .5*dt, torch.get_num_threads(), result)
+                    .5*dt, result)
                 valid = bool(result[2])
                 next_dt = min(cfl/((2*self.model.s.p+1)*result[1]),
                               cfl*result[0]/self.diffusion_factor) if valid else float('nan')
             else:
                 self.library.flux_rk_finalize(original.data_ptr(), stage.data_ptr(), self.pending.data_ptr(),
-                    output.data_ptr(), self.count, self.last_force, coefficient, int(combined), torch.get_num_threads())
+                    output.data_ptr(), self.count, self.last_force, coefficient, int(combined))
             stage = output
         return stage, valid, next_dt

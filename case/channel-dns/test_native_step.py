@@ -20,6 +20,19 @@ class NativeStepTests(unittest.TestCase):
         self.native = NativeFluxStepper(self.model, self.base)
         self.state = self.model.initial(.5).movedim(-1, 0).contiguous().movedim(0, -1)
 
+    def test_runtime_thread_changes(self):
+        # Reuse the same native objects as the global ATen thread count changes.
+        torch.set_num_threads(1)
+        dt = self.model.timestep(self.state, .1)
+        expected = self.native.advance(self.state, 0., dt)
+        expected_scan = self.native.scan(self.state, 1.2)
+        for threads in (2, 3, 1):
+            with self.subTest(threads=threads):
+                torch.set_num_threads(threads)
+                actual = self.native.advance(self.state, 0., dt)
+                torch.testing.assert_close(actual, expected, rtol=1e-12, atol=1e-10)
+                self.assertEqual(self.native.scan(self.state, 1.2), expected_scan)
+
     def test_scan_and_invalid_states(self):
         good, dt = self.native.scan(self.state, 1.2)
         self.assertTrue(good)

@@ -5,10 +5,10 @@
 #include <vector>
 #include "../../fr/native/time.hpp"
 #include "../../fr/native/boundaries.hpp"
-#include <omp.h>
+#include "../../fr/native/parallel.hpp"
 
 struct Solver {
-    int nx, ny, nz, n, cells, nodes, threads;
+    int nx, ny, nz, n, cells, nodes;
     std::vector<double> scale;
     int boundary_kind;
     double voltage_amplitude;
@@ -16,10 +16,10 @@ struct Solver {
     std::vector<double> feed_coeff, feed_lift;
     std::vector<double> D,L,R,gl,gr,rate,drive,physical,traces,faces,stage,k,acc;
     std::vector<uint8_t> solid;
-    Solver(int x,int y,int z,int q,int nt,const double* h,const double* op,
+    Solver(int x,int y,int z,int q,const double* h,const double* op,
            const double* damping,const double* source,const uint8_t* mask,
            int boundary,const int64_t* ids,const double* coeff,const double* lift,int feed_count,double amplitude)
-      :nx(x),ny(y),nz(z),n(q),cells(x*y*z),nodes(q*q*q),threads(nt),
+      :nx(x),ny(y),nz(z),n(q),cells(x*y*z),nodes(q*q*q),
        scale(cells*3),boundary_kind(boundary),voltage_amplitude(amplitude),
        feed_ids(feed_count),feed_coeff(feed_count),feed_lift(feed_count),D(op,op+q*q), L(op+q*q,op+q*q+q), R(op+q*q+q,op+q*q+2*q),
        gl(op+q*q+2*q,op+q*q+3*q), gr(op+q*q+3*q,op+q*q+4*q),
@@ -63,87 +63,91 @@ struct Solver {
             return (((size_t(e)*3+a)*2+s)*n*n+b*n+c)*6;
         };
         const int total=cells*nodes;
-        #pragma omp parallel for num_threads(threads) schedule(static)
-        for(int p=0;p<total;++p)
-            for(int v=0;v<6;++v)
-                physical[size_t(p)*6+v]=u[size_t(p)*18+v]+u[size_t(p)*18+6+v]+u[size_t(p)*18+12+v];
-        #pragma omp parallel for num_threads(threads) schedule(static)
-        for(int e=0;e<cells;++e) {
-            for(int a=0;a<3;++a) for(int s=0;s<2;++s)
-                for(int b=0;b<n;++b) for(int c=0;c<n;++c) {
-                    double* tr=&traces[face_local(e,a,s,b,c)];
-                    for(int v=0;v<6;++v) tr[v]=0.;
-                    const auto& vector=s?R:L;
-                    for(int q=0;q<n;++q) {
-                        const double* p=&physical[(size_t(e)*nodes+line_local(a,q,b,c))*6];
-                        for(int v=0;v<6;++v) tr[v]+=vector[q]*p[v];
+        at::parallel_for(0, total, 1024, [&](int64_t begin, int64_t finish) {
+            for(int p=begin;p<finish;++p)
+                for(int v=0;v<6;++v)
+                    physical[size_t(p)*6+v]=u[size_t(p)*18+v]+u[size_t(p)*18+6+v]+u[size_t(p)*18+12+v];
+        });
+        at::parallel_for(0, cells, 1, [&](int64_t begin, int64_t finish) {
+            for(int e=begin;e<finish;++e) {
+                for(int a=0;a<3;++a) for(int s=0;s<2;++s)
+                    for(int b=0;b<n;++b) for(int c=0;c<n;++c) {
+                        double* tr=&traces[face_local(e,a,s,b,c)];
+                        for(int v=0;v<6;++v) tr[v]=0.;
+                        const auto& vector=s?R:L;
+                        for(int q=0;q<n;++q) {
+                            const double* p=&physical[(size_t(e)*nodes+line_local(a,q,b,c))*6];
+                            for(int v=0;v<6;++v) tr[v]+=vector[q]*p[v];
+                        }
+                    }
+            }
+        });
+        at::parallel_for(0, cells, 1, [&](int64_t begin, int64_t finish) {
+            for(int e=begin;e<finish;++e) {
+                const int location[3]={e/(ny*nz),(e/nz)%ny,e%nz};
+                const int sizes[3]={nx,ny,nz}, strides[3]={ny*nz,nz,1};
+                for(int a=0;a<3;++a) for(int s=0;s<2;++s) {
+                    const int neighbor=e+(s?1:-1)*strides[a];
+                    const bool boundary=s ? location[a]==sizes[a]-1 : location[a]==0;
+                    const bool pec=boundary || (!boundary && solid[neighbor]);
+                    for(int b=0;b<n;++b) for(int c=0;c<n;++c) {
+                        const double* own=&traces[face_local(e,a,s,b,c)];
+                        double ghost[6];
+                        const double* other;
+                        if(boundary && boundary_kind==1) {
+                            fr_boundary::zero_incoming(ghost,6);
+                            other=ghost; // Incoming characteristic zero: Silver-Muller.
+                        } else if(pec) {
+                            fr_boundary::maxwell_pec(own,a,ghost);
+                            other=ghost;
+                        } else other=&traces[face_local(neighbor,a,1-s,b,c)];
+                        double* f=&faces[face_local(e,a,s,b,c)];
+                        const double* minus=s?own:other;
+                        const double* plus=s?other:own;
+                        for(int v=0;v<6;++v)
+                            f[v]=.5*(flux(minus,a,v)+flux(plus,a,v))
+                                 -.5*((v%3==a)?0.:plus[v]-minus[v]);
                     }
                 }
-        }
-        #pragma omp parallel for num_threads(threads) schedule(static)
-        for(int e=0;e<cells;++e) {
-            const int location[3]={e/(ny*nz),(e/nz)%ny,e%nz};
-            const int sizes[3]={nx,ny,nz}, strides[3]={ny*nz,nz,1};
-            for(int a=0;a<3;++a) for(int s=0;s<2;++s) {
-                const int neighbor=e+(s?1:-1)*strides[a];
-                const bool boundary=s ? location[a]==sizes[a]-1 : location[a]==0;
-                const bool pec=boundary || (!boundary && solid[neighbor]);
-                for(int b=0;b<n;++b) for(int c=0;c<n;++c) {
-                    const double* own=&traces[face_local(e,a,s,b,c)];
-                    double ghost[6];
-                    const double* other;
-                    if(boundary && boundary_kind==1) {
-                        fr_boundary::zero_incoming(ghost,6);
-                        other=ghost; // Incoming characteristic zero: Silver-Muller.
-                    } else if(pec) {
-                        fr_boundary::maxwell_pec(own,a,ghost);
-                        other=ghost;
-                    } else other=&traces[face_local(neighbor,a,1-s,b,c)];
-                    double* f=&faces[face_local(e,a,s,b,c)];
-                    const double* minus=s?own:other;
-                    const double* plus=s?other:own;
-                    for(int v=0;v<6;++v)
-                        f[v]=.5*(flux(minus,a,v)+flux(plus,a,v))
-                             -.5*((v%3==a)?0.:plus[v]-minus[v]);
-                }
             }
-        }
+        });
         const double ramp=std::pow(std::sin(1.57079632679489661923*std::min(t/2.,1.)),2);
         const double excitation=ramp*std::cos(6.28318530717958647693*t)/3.;
-        #pragma omp parallel for num_threads(threads) schedule(static)
-        for(int e=0;e<cells;++e) {
-            if(solid[e]) {
-                std::fill(out+size_t(e)*nodes*18,out+size_t(e+1)*nodes*18,0.);
-                continue;
-            }
-            for(int i=0;i<n;++i) for(int j=0;j<n;++j) for(int l=0;l<n;++l) {
-                const int index[3]={i,j,l};
-                const size_t p=size_t(e)*nodes+point_local(i,j,l);
-                for(int a=0;a<3;++a) {
-                    const int b=a==0?j:i, c=a==2?j:l;
-                    const int q=index[a];
-                    const double* fl=&traces[face_local(e,a,0,b,c)];
-                    const double* fr=&traces[face_local(e,a,1,b,c)];
-                    const double* common_l=&faces[face_local(e,a,0,b,c)];
-                    const double* common_r=&faces[face_local(e,a,1,b,c)];
-                    double derivative[6]={0.,0.,0.,0.,0.,0.};
-                    for(int m=0;m<n;++m) {
-                        const double coefficient=D[q*n+m];
-                        const double* value=&physical[(size_t(e)*nodes+line_local(a,m,b,c))*6];
-                        for(int v=0;v<6;++v) derivative[v]+=coefficient*value[v];
+        at::parallel_for(0, cells, 1, [&](int64_t begin, int64_t finish) {
+            for(int e=begin;e<finish;++e) {
+                if(solid[e]) {
+                    std::fill(out+size_t(e)*nodes*18,out+size_t(e+1)*nodes*18,0.);
+                    continue;
+                }
+                for(int i=0;i<n;++i) for(int j=0;j<n;++j) for(int l=0;l<n;++l) {
+                    const int index[3]={i,j,l};
+                    const size_t p=size_t(e)*nodes+point_local(i,j,l);
+                    for(int a=0;a<3;++a) {
+                        const int b=a==0?j:i, c=a==2?j:l;
+                        const int q=index[a];
+                        const double* fl=&traces[face_local(e,a,0,b,c)];
+                        const double* fr=&traces[face_local(e,a,1,b,c)];
+                        const double* common_l=&faces[face_local(e,a,0,b,c)];
+                        const double* common_r=&faces[face_local(e,a,1,b,c)];
+                        double derivative[6]={0.,0.,0.,0.,0.,0.};
+                        for(int m=0;m<n;++m) {
+                            const double coefficient=D[q*n+m];
+                            const double* value=&physical[(size_t(e)*nodes+line_local(a,m,b,c))*6];
+                            for(int v=0;v<6;++v) derivative[v]+=coefficient*value[v];
+                        }
+                        const size_t offset=p*18+a*6;
+                        for(int v=0;v<6;++v)
+                            out[offset+v]=-rate[p*3+a]*u[offset+v]-(v==2?excitation*drive[p]:0.);
+                        const int j=(a+1)%3, l=(a+2)%3;
+                        const double factor=scale[e*3+a];
+                        out[offset+j]-=factor*(derivative[3+l]+gl[q]*(common_l[j]-fl[3+l])+gr[q]*(common_r[j]-fr[3+l]));
+                        out[offset+l]-=factor*(-derivative[3+j]+gl[q]*(common_l[l]+fl[3+j])+gr[q]*(common_r[l]+fr[3+j]));
+                        out[offset+3+j]-=factor*(-derivative[l]+gl[q]*(common_l[3+j]+fl[l])+gr[q]*(common_r[3+j]+fr[l]));
+                        out[offset+3+l]-=factor*(derivative[j]+gl[q]*(common_l[3+l]-fl[j])+gr[q]*(common_r[3+l]-fr[j]));
                     }
-                    const size_t offset=p*18+a*6;
-                    for(int v=0;v<6;++v)
-                        out[offset+v]=-rate[p*3+a]*u[offset+v]-(v==2?excitation*drive[p]:0.);
-                    const int j=(a+1)%3, l=(a+2)%3;
-                    const double factor=scale[e*3+a];
-                    out[offset+j]-=factor*(derivative[3+l]+gl[q]*(common_l[j]-fl[3+l])+gr[q]*(common_r[j]-fr[3+l]));
-                    out[offset+l]-=factor*(-derivative[3+j]+gl[q]*(common_l[l]+fl[3+j])+gr[q]*(common_r[l]+fr[3+j]));
-                    out[offset+3+j]-=factor*(-derivative[l]+gl[q]*(common_l[3+j]+fl[l])+gr[q]*(common_r[3+j]+fr[l]));
-                    out[offset+3+l]-=factor*(derivative[j]+gl[q]*(common_l[3+l]-fl[j])+gr[q]*(common_r[3+l]-fr[j]));
                 }
             }
-        }
+        });
     }
     double line_voltage(const double* u) const {
         double value=0.;
@@ -179,11 +183,12 @@ struct Solver {
             rhs((s||!feed_ids.empty())?stage.data():u,k.data(),stage_time);
           },
           [&](int s,double weight,double factor) {
-            #pragma omp parallel for num_threads(threads) schedule(static)
-            for(size_t p=0;p<count;++p) {
-                double value=fr_time::rk4_update(u[p],k[p],acc[p],s,dt,weight,factor);
-                if(s<3) stage[p]=value; else out[p]=value;
-            }
+            at::parallel_for(0, count, 1024, [&](int64_t begin, int64_t finish) {
+                for(size_t p=begin;p<finish;++p) {
+                    double value=fr_time::rk4_update(u[p],k[p],acc[p],s,dt,weight,factor);
+                    if(s<3) stage[p]=value; else out[p]=value;
+                }
+            });
           },
           [&](int s,double stage_time) {
             project(s<3?stage.data():out,signal(stage_time));
@@ -191,10 +196,10 @@ struct Solver {
     }
 };
 extern "C" {
-void* antenna_create(int x,int y,int z,int n,int threads,const double* h,const double* op,
+void* antenna_create(int x,int y,int z,int n,const double* h,const double* op,
                      const double* rate,const double* drive,const uint8_t* solid,
                      int boundary,const int64_t* ids,const double* coeff,const double* lift,int feed_count,double amplitude) {
-    try { return new Solver(x,y,z,n,threads,h,op,rate,drive,solid,boundary,ids,coeff,lift,feed_count,amplitude); } catch(...) { return nullptr; }
+    try { return new Solver(x,y,z,n,h,op,rate,drive,solid,boundary,ids,coeff,lift,feed_count,amplitude); } catch(...) { return nullptr; }
 }
 double antenna_voltage(void* ptr,const double* u) { return static_cast<Solver*>(ptr)->line_voltage(u); }
 void antenna_destroy(void* ptr) { delete static_cast<Solver*>(ptr); }

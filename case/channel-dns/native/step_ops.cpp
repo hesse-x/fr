@@ -3,74 +3,77 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
-#include <vector>
-#include <omp.h>
+#include "../../../fr/native/parallel.hpp"
 #include "avx2.hpp"
 using simd::Vec;
 
+namespace {
+struct Scan {
+    double minimum=std::numeric_limits<double>::infinity(),maximum=0.;
+    int valid=1;
+};
+Scan merge_scan(Scan a,Scan b) {
+    return {std::min(a.minimum,b.minimum),std::max(a.maximum,b.maximum),a.valid & b.valid};
+}
+}
+
 extern "C" double flux_force(const double* rhs,const double* weights,
-                              const double* scales,int64_t cells,int threads) {
-    std::vector<double> partial(threads,0.);
-    #pragma omp parallel num_threads(threads)
-    {
-        Vec sum=0.;
-        #pragma omp for schedule(static)
-        for(int64_t e=0;e<cells;++e)
-            for(int n=0;n<64;n+=4)
-                sum=sum+(simd::load(rhs+cells*64+e*64+n)*simd::load(weights+n))*scales[e];
-        double lane[4];
-        simd::store(lane,sum);
-        partial[omp_get_thread_num()]=((lane[0]+lane[1])+lane[2])+lane[3];
-    }
-    double sum=0.;
-    for(int i=0;i<threads;++i) sum+=partial[i];
-    return -sum;
+                              const double* scales,int64_t cells) {
+    return -at::parallel_reduce(0, cells, 1, 0.,
+        [&](int64_t begin, int64_t end, double initial) {
+            Vec sum=0.;
+            for(int64_t e=begin;e<end;++e)
+                for(int n=0;n<64;n+=4)
+                    sum=sum+(simd::load(rhs+cells*64+e*64+n)*simd::load(weights+n))*scales[e];
+            double lane[4];
+            simd::store(lane,sum);
+            return initial+((lane[0]+lane[1])+lane[2])+lane[3];
+        }, [](double a,double b) { return a+b; });
 }
 
 extern "C" void flux_rk_update(const double* original,const double* stage,
                                 const double* rhs,double* output,int64_t count,
-                                double force,double coefficient,int combined,int threads) {
-    #pragma omp parallel for num_threads(threads) schedule(static)
-    for(int64_t at=0;at<count;at+=4) {
-        Vec u=simd::load(stage+count+at)/simd::load(stage+at);
-        for(int c=0;c<5;++c) {
-            Vec derivative=simd::load(rhs+c*count+at);
-            if(c==1) derivative=derivative+force;
-            if(c==4) derivative=derivative+force*u;
-            Vec value=simd::load(stage+c*count+at);
-            if(combined) value=simd::load(original+c*count+at)*(2./3.)+value*(1./3.);
-            simd::store(output+c*count+at,value+coefficient*derivative);
+                                double force,double coefficient,int combined) {
+    at::parallel_for(0, count/4, 1024, [&](int64_t begin, int64_t finish) {
+        for(int64_t at=begin * 4;at<finish * 4;at+=4) {
+            Vec u=simd::load(stage+count+at)/simd::load(stage+at);
+            for(int c=0;c<5;++c) {
+                Vec derivative=simd::load(rhs+c*count+at);
+                if(c==1) derivative=derivative+force;
+                if(c==4) derivative=derivative+force*u;
+                Vec value=simd::load(stage+c*count+at);
+                if(combined) value=simd::load(original+c*count+at)*(2./3.)+value*(1./3.);
+                simd::store(output+c*count+at,value+coefficient*derivative);
+            }
         }
-    }
+    });
 }
 
 extern "C" void flux_rk_finalize(const double* original,const double* stage,
     const double* pending,double* output,int64_t count,double force,double coefficient,
-    int combined,int threads) {
-    #pragma omp parallel for num_threads(threads) schedule(static)
-    for(int64_t at=0;at<count;at+=4) {
-        Vec u=simd::load(stage+count+at)/simd::load(stage+at);
-        Vec momentum=simd::load(pending+count+at)+force;
-        Vec energy=simd::load(pending+at)+force*u;
-        Vec m=simd::load(stage+count+at),e=simd::load(stage+4*count+at);
-        if(combined) {
-            m=simd::load(original+count+at)*(2./3.)+m*(1./3.);
-            e=simd::load(original+4*count+at)*(2./3.)+e*(1./3.);
+    int combined) {
+    at::parallel_for(0, count/4, 1024, [&](int64_t begin, int64_t finish) {
+        for(int64_t at=begin * 4;at<finish * 4;at+=4) {
+            Vec u=simd::load(stage+count+at)/simd::load(stage+at);
+            Vec momentum=simd::load(pending+count+at)+force;
+            Vec energy=simd::load(pending+at)+force*u;
+            Vec m=simd::load(stage+count+at),e=simd::load(stage+4*count+at);
+            if(combined) {
+                m=simd::load(original+count+at)*(2./3.)+m*(1./3.);
+                e=simd::load(original+4*count+at)*(2./3.)+e*(1./3.);
+            }
+            simd::store(output+count+at,m+coefficient*momentum);
+            simd::store(output+4*count+at,e+coefficient*energy);
         }
-        simd::store(output+count+at,m+coefficient*momentum);
-        simd::store(output+4*count+at,e+coefficient*energy);
-    }
+    });
 }
 
 extern "C" void state_scan(const double* state,const double* widths,int64_t cells,
-                            double gamma,int threads,double* result) {
-    double minimum=std::numeric_limits<double>::infinity(),maximum=0.;
-    int valid=1;
-    #pragma omp parallel num_threads(threads) reduction(min:minimum) reduction(max:maximum) reduction(&:valid)
-    {
+                            double gamma,double* result) {
+    auto scan=at::parallel_reduce(0, cells, 1, Scan{},
+      [&](int64_t begin, int64_t end, Scan local) {
         Vec rho_min=std::numeric_limits<double>::infinity(),rate_max=0.;
-        #pragma omp for schedule(static)
-        for(int64_t e=0;e<cells;++e) {
+        for(int64_t e=begin;e<end;++e) {
             for(int n=0;n<64;n+=4) {
                 int64_t at=e*64+n,count=cells*64;
                 Vec rho=simd::load(state+at),mx=simd::load(state+count+at);
@@ -83,7 +86,7 @@ extern "C" void state_scan(const double* state,const double* widths,int64_t cell
                 for(Vec field : {rho,mx,my,mz,energy})
                     good=_mm256_and_pd(good,_mm256_cmp_pd(simd::abs(field).value,
                                             _mm256_set1_pd(std::numeric_limits<double>::max()),_CMP_LE_OQ));
-                valid &= _mm256_movemask_pd(good)==15;
+                local.valid &= _mm256_movemask_pd(good)==15;
                 Vec sound=simd::sqrt(gamma*pressure/rho);
                 Vec rate=(Vec(0.)+(simd::abs(u)+sound)/widths[e*3]);
                 rate=rate+(simd::abs(v)+sound)/widths[e*3+1];
@@ -94,9 +97,10 @@ extern "C" void state_scan(const double* state,const double* widths,int64_t cell
         }
         double r[4],a[4];
         simd::store(r,rho_min); simd::store(a,rate_max);
-        for(int i=0;i<4;++i) { minimum=std::min(minimum,r[i]); maximum=std::max(maximum,a[i]); }
-    }
-    result[0]=minimum; result[1]=maximum; result[2]=valid;
+        for(int i=0;i<4;++i) { local.minimum=std::min(local.minimum,r[i]); local.maximum=std::max(local.maximum,a[i]); }
+        return local;
+    }, merge_scan);
+    result[0]=scan.minimum; result[1]=scan.maximum; result[2]=scan.valid;
 }
 
 namespace {
@@ -121,26 +125,27 @@ inline void accumulate(double* dst,Vec previous,Vec current,double weight) {
 
 extern "C" void mean_accumulate(const double* previous,const double* current,
                                  double* integral,int64_t count,double gamma,
-                                 double weight,int threads) {
-    #pragma omp parallel for num_threads(threads) schedule(static)
-    for(int64_t at=0;at<count;at+=4) {
-        const Primitive a=primitives(previous,count,at,gamma);
-        const Primitive b=primitives(current,count,at,gamma);
-        // Match Channel.field_moments order and two sequential trapezoidal adds.
-        // The only persistent statistics buffer is the SoA time integral.
-        accumulate(integral+at, a.rho,b.rho,weight);
-        accumulate(integral+count+at, a.u,b.u,weight);
-        accumulate(integral+2*count+at, a.v,b.v,weight);
-        accumulate(integral+3*count+at, a.w,b.w,weight);
-        accumulate(integral+4*count+at, a.pressure,b.pressure,weight);
-        accumulate(integral+5*count+at, a.temperature,b.temperature,weight);
-        accumulate(integral+6*count+at, a.u*a.u,b.u*b.u,weight);
-        accumulate(integral+7*count+at, a.v*a.v,b.v*b.v,weight);
-        accumulate(integral+8*count+at, a.w*a.w,b.w*b.w,weight);
-        accumulate(integral+9*count+at, a.u*a.v,b.u*b.v,weight);
-        accumulate(integral+10*count+at, a.u*a.w,b.u*b.w,weight);
-        accumulate(integral+11*count+at, a.v*a.w,b.v*b.w,weight);
-    }
+                                 double weight) {
+    at::parallel_for(0, count/4, 1024, [&](int64_t begin, int64_t finish) {
+        for(int64_t at=begin * 4;at<finish * 4;at+=4) {
+            const Primitive a=primitives(previous,count,at,gamma);
+            const Primitive b=primitives(current,count,at,gamma);
+            // Match Channel.field_moments order and two sequential trapezoidal adds.
+            // The only persistent statistics buffer is the SoA time integral.
+            accumulate(integral+at, a.rho,b.rho,weight);
+            accumulate(integral+count+at, a.u,b.u,weight);
+            accumulate(integral+2*count+at, a.v,b.v,weight);
+            accumulate(integral+3*count+at, a.w,b.w,weight);
+            accumulate(integral+4*count+at, a.pressure,b.pressure,weight);
+            accumulate(integral+5*count+at, a.temperature,b.temperature,weight);
+            accumulate(integral+6*count+at, a.u*a.u,b.u*b.u,weight);
+            accumulate(integral+7*count+at, a.v*a.v,b.v*b.v,weight);
+            accumulate(integral+8*count+at, a.w*a.w,b.w*b.w,weight);
+            accumulate(integral+9*count+at, a.u*a.v,b.u*b.v,weight);
+            accumulate(integral+10*count+at, a.u*a.w,b.u*b.w,weight);
+            accumulate(integral+11*count+at, a.v*a.w,b.v*b.w,weight);
+        }
+    });
 }
 
 namespace {
@@ -148,15 +153,12 @@ template<bool Sample>
 void finish_impl(const double* original,const double* stage,const double* pending,
     double* output,const double* widths,double* integral,int64_t cells,
     double force,double coefficient,int combined,double gamma,double weight,
-    int threads,double* result) {
+    double* result) {
     int64_t count=cells*64;
-    double minimum=std::numeric_limits<double>::infinity(),maximum=0.;
-    int valid=1;
-    #pragma omp parallel num_threads(threads) reduction(min:minimum) reduction(max:maximum) reduction(&:valid)
-    {
+    auto scan=at::parallel_reduce(0, cells, 1, Scan{},
+      [&](int64_t begin, int64_t end, Scan local) {
         Vec rho_min=std::numeric_limits<double>::infinity(),rate_max=0.;
-        #pragma omp for schedule(static)
-        for(int64_t cell=0;cell<cells;++cell) for(int n=0;n<64;n+=4) {
+        for(int64_t cell=begin;cell<end;++cell) for(int n=0;n<64;n+=4) {
             int64_t at=cell*64+n;
             Vec stage_u=simd::load(stage+count+at)/simd::load(stage+at);
             Vec dm=simd::load(pending+count+at)+force;
@@ -177,7 +179,7 @@ void finish_impl(const double* original,const double* stage,const double* pendin
             for(Vec field : {rho,mx,my,mz,energy})
                 good=_mm256_and_pd(good,_mm256_cmp_pd(simd::abs(field).value,
                     _mm256_set1_pd(std::numeric_limits<double>::max()),_CMP_LE_OQ));
-            valid &= _mm256_movemask_pd(good)==15;
+            local.valid &= _mm256_movemask_pd(good)==15;
             Vec sound=simd::sqrt(gamma*pressure/rho);
             Vec rate=Vec(0.)+(simd::abs(u)+sound)/widths[cell*3];
             rate=rate+(simd::abs(v)+sound)/widths[cell*3+1];
@@ -202,18 +204,19 @@ void finish_impl(const double* original,const double* stage,const double* pendin
         }
         double r[4],a[4];
         simd::store(r,rho_min); simd::store(a,rate_max);
-        for(int i=0;i<4;++i) { minimum=std::min(minimum,r[i]); maximum=std::max(maximum,a[i]); }
-    }
-    result[0]=minimum; result[1]=maximum; result[2]=valid;
+        for(int i=0;i<4;++i) { local.minimum=std::min(local.minimum,r[i]); local.maximum=std::max(local.maximum,a[i]); }
+        return local;
+    }, merge_scan);
+    result[0]=scan.minimum; result[1]=scan.maximum; result[2]=scan.valid;
 }
 }
 
 extern "C" void flux_rk_finish(const double* original,const double* stage,const double* pending,
     double* output,const double* widths,double* integral,int64_t cells,
     double force,double coefficient,int combined,double gamma,double weight,
-    int threads,double* result) {
+    double* result) {
     if(integral) finish_impl<true>(original,stage,pending,output,widths,integral,cells,
-                                 force,coefficient,combined,gamma,weight,threads,result);
+                                 force,coefficient,combined,gamma,weight,result);
     else finish_impl<false>(original,stage,pending,output,widths,integral,cells,
-                           force,coefficient,combined,gamma,weight,threads,result);
+                           force,coefficient,combined,gamma,weight,result);
 }

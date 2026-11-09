@@ -5,7 +5,7 @@ from pathlib import Path
 import subprocess
 
 import torch
-from fr.native import header_bytes
+from fr.native import header_bytes, aten_compile_flags
 
 _LIBRARY = None
 
@@ -16,8 +16,8 @@ def load_library():
         return _LIBRARY
     source = Path(__file__).with_suffix('.cpp')
     flags = ['-O3', '-std=c++17', '-march=native', '-fopenmp',
-             '-ffp-contract=fast', '-fno-math-errno', '-shared', '-fPIC']
-    key = hashlib.sha256(source.read_bytes()+header_bytes()+' '.join(flags).encode()).hexdigest()[:16]
+             '-ffp-contract=fast', '-fno-math-errno', '-shared', '-fPIC'] + aten_compile_flags()
+    key = hashlib.sha256(source.read_bytes()+header_bytes()+torch.__version__.encode()+' '.join(flags).encode()).hexdigest()[:16]
     build = Path('/tmp/fr-parabolic-native')/key
     build.mkdir(parents=True, exist_ok=True)
     target = build/'antenna.so'
@@ -34,7 +34,7 @@ def load_library():
         temporary.replace(target)
     lib = ctypes.CDLL(str(target))
     p, i, d = ctypes.c_void_p, ctypes.c_int, ctypes.c_double
-    lib.antenna_create.argtypes = [i, i, i, i, i, p, p, p, p, p, i, p, p, p, i, d]
+    lib.antenna_create.argtypes = [i, i, i, i, p, p, p, p, p, i, p, p, p, i, d]
     lib.antenna_create.restype = p
     lib.antenna_voltage.argtypes = [p, p]
     lib.antenna_voltage.restype = d
@@ -59,7 +59,7 @@ class NativeMaxwell:
         rates = case.damping.squeeze(-1).contiguous()
         drive = case.drive_cos.contiguous()
         solid = case.solid.to(torch.uint8).contiguous()
-        self.handle = self.library.antenna_create(*case.cells, case.p+1, torch.get_num_threads(),
+        self.handle = self.library.antenna_create(*case.cells, case.p+1,
             h.data_ptr(), operators.data_ptr(), rates.data_ptr(), drive.data_ptr(), solid.data_ptr(),
             int(case.outer_boundary == 'silver-muller'), case.feed_ids.data_ptr(),
             case.feed_coeff.data_ptr(), case.feed_lift.data_ptr(), len(case.feed_ids), case.voltage_amplitude)

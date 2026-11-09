@@ -16,7 +16,7 @@ _LIBRARIES = {}
 def load_library():
     source = Path(__file__).with_name('native')/'grouped_fused.cpp'
     flags = compiler_flags()
-    key = hashlib.sha256(source.read_bytes()+header_bytes()+' '.join(flags).encode()).hexdigest()[:16]
+    key = hashlib.sha256(source.read_bytes()+header_bytes()+torch.__version__.encode()+' '.join(flags).encode()).hexdigest()[:16]
     if key in _LIBRARIES:
         return _LIBRARIES[key]
     build = Path('/tmp/fr-channel-native')/key
@@ -30,9 +30,9 @@ def load_library():
         result.check_returncode()
     lib = ctypes.CDLL(str(target))
     p, i, n = ctypes.c_void_p, ctypes.c_int, ctypes.c_int64
-    lib.grouped_fused.argtypes = [p, p, n, p, p, p, i, i, i, i, i, i, i, p]
+    lib.grouped_fused.argtypes = [p, p, n, p, p, p, i, i, i, i, i, i, p]
     lib.grouped_fused.restype = None
-    lib.grouped_fused_rk.argtypes = [p, p, n, p, p, p, i, i, i, i, i, i, i, p, p, ctypes.c_double, i]
+    lib.grouped_fused_rk.argtypes = [p, p, n, p, p, p, i, i, i, i, i, i, p, p, ctypes.c_double, i]
     lib.grouped_fused_rk.restype = None
     lib.build_directory = str(build)
     _LIBRARIES[key] = lib
@@ -79,7 +79,7 @@ class GroupedFused:
         conv, ldg = self.convection, self.ldg
         self.library.grouped_fused(state.data_ptr(), output.data_ptr(), self.count,
             self.conv_pointers, self.ldg_pointers, self.constants, conv.groups, conv.max_cells,
-            conv.max_faces, ldg.max_owned, ldg.max_active, ldg.max_primitive, torch.get_num_threads(), timing)
+            conv.max_faces, ldg.max_owned, ldg.max_active, ldg.max_primitive, timing)
         return (output, list(timing)) if profile else output
 
     def make_rhs(self):
@@ -98,5 +98,5 @@ class GroupedFused:
         conv, ldg = self.convection, self.ldg
         self.library.grouped_fused_rk(stage.data_ptr(), output.data_ptr(), self.count,
             self.conv_pointers, self.ldg_pointers, self.constants, conv.groups, conv.max_cells,
-            conv.max_faces, ldg.max_owned, ldg.max_active, ldg.max_primitive, torch.get_num_threads(),
+            conv.max_faces, ldg.max_owned, ldg.max_active, ldg.max_primitive,
             original.data_ptr(), pending.data_ptr(), coefficient, int(combined))

@@ -21,7 +21,7 @@ def load_library():
         return _LIBRARY
     source = Path(__file__).with_name('native')/'grouped_convection.cpp'
     flags = compiler_flags()
-    key = hashlib.sha256(source.read_bytes()+header_bytes()+' '.join(flags).encode()).hexdigest()[:16]
+    key = hashlib.sha256(source.read_bytes()+header_bytes()+torch.__version__.encode()+' '.join(flags).encode()).hexdigest()[:16]
     build = Path('/tmp/fr-channel-native')/key
     build.mkdir(parents=True, exist_ok=True)
     target = build/'grouped_convection.so'
@@ -35,7 +35,7 @@ def load_library():
     library = ctypes.CDLL(str(target))
     p = ctypes.c_void_p
     library.grouped_convection.argtypes = [p, p, ctypes.c_int64]+[p]*12+[
-        ctypes.c_double, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, p]
+        ctypes.c_double, ctypes.c_int, ctypes.c_int, ctypes.c_int, p]
     library.grouped_convection.restype = None
     library.build_directory = str(build)
     _LIBRARY = library
@@ -122,7 +122,7 @@ class GroupedConvection:
         timing = (ctypes.c_double*4)() if profile else None
         self.library.grouped_convection(state.data_ptr(), output.data_ptr(), self.count,
             *(buffer.data_ptr() for buffer in self.buffers), self.gamma,
-            self.groups, self.max_cells, self.max_faces, torch.get_num_threads(), timing)
+            self.groups, self.max_cells, self.max_faces, timing)
         if profile:
             return output, dict(zip(('pack_and_face_traces', 'numerical_flux',
                                      'primitive_volume_and_lifting', 'scatter'), timing))

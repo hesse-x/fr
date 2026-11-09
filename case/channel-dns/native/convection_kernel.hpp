@@ -5,7 +5,7 @@
 #include <cstdint>
 #include <cstring>
 #include <vector>
-#include <omp.h>
+#include "../../../fr/native/parallel.hpp"
 #include "avx2.hpp"
 using simd::Vec;
 
@@ -75,7 +75,7 @@ inline Group group(const double* input,int64_t elements,int g,
             double* result=flux+5*stride;
             double* face_states=result+5*stride;
             double* common=face_states+10*F;
-            double t=timing ? omp_get_wtime():0;
+            double t=timing ? fr_parallel::wall_time():0;
             for(int c=0;c<C;++c) for(int e=0;e<count;++e) {
                 const int64_t old=cells[start+e];
                 simd::copy64(packed+c*stride+e*N,input+c*elements*N+old*N);
@@ -107,8 +107,8 @@ inline Group group(const double* input,int64_t elements,int g,
                 }
                 solve_face(axis,face_state,face_state+5*F,common+f*5*F,reference,gamma);
             }
-            if(timing) { pack_total+=omp_get_wtime()-t; t=omp_get_wtime(); }
-            if(timing) { face_total+=omp_get_wtime()-t; t=omp_get_wtime(); }
+            if(timing) { pack_total+=fr_parallel::wall_time()-t; t=fr_parallel::wall_time(); }
+            if(timing) { face_total+=fr_parallel::wall_time()-t; t=fr_parallel::wall_time(); }
             for(int n=0;n<stride;n+=4) {
                 Vec rho=simd::load(packed+n);
                 Vec u=simd::load(packed+stride+n)/rho,v=simd::load(packed+2*stride+n)/rho,w=simd::load(packed+3*stride+n)/rho;
@@ -147,7 +147,7 @@ inline Group group(const double* input,int64_t elements,int g,
                     }
                 }
             }
-            if(timing) { volume_total+=omp_get_wtime()-t; t=omp_get_wtime(); }
+            if(timing) { volume_total+=fr_parallel::wall_time()-t; t=fr_parallel::wall_time(); }
     if(timing) { timing[0]+=pack_total; timing[1]+=face_total; timing[2]+=volume_total; }
     return {result,primitive,packed,count};
 }
