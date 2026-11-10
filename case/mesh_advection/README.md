@@ -1,6 +1,6 @@
 # 曲边三角形、四边形及混合网格平流
 
-入口：[mesh_advection.py](../mesh_advection.py)。以下命令均从仓库根目录执行。
+入口：[solve.py](solve.py)。以下命令均从仓库根目录执行。
 
 网格接口和离散方法见“框架设计”。本例在生成或读入的网格上求解开放边界平流。外部Gmsh网格的生成命令见[mesh_generation](../mesh_generation/README.md)。
 

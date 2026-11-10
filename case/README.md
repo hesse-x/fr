@@ -2,6 +2,20 @@
 
 各算例路径和计算内容见[根README](../README.md)。参数、网格、命令及实测结果见各自README。
 
+## 目录约定
+
+`case/` 是 Python 命名空间包，根目录只放说明和算例目录，不放 Python 文件。每个算例的代码、说明、参考数据与图片放在自己的目录中：
+
+```text
+case/<name>/
+  __init__.py       导出的算例类和公共辅助函数
+  __main__.py       python -m case.<name> 的入口
+  solve.py          算例组装和求解
+  README.md         当前设计、运行方式和结果
+```
+
+辅助模块按职责放在相应算例目录内，例如 `mie_cylinder/exact.py` 存放圆柱级数参考解，`mesh_generation/mesh/` 存放 Gmsh 模板。复杂算例可在目录内进一步拆分模块；入口及运行参数见各自 README。
+
 ## 云图与动画
 
 直接运行算例就会在 `--output` 目录中生成图片，原有 CSV/PT/VTK 等输出继续保留。
@@ -16,7 +30,8 @@
 | `uniform_array` | xy 截面 Ez、远场功率方向图及解析对照 | 阵列辐射的建立过程 |
 | `advection` | 标量场；1D 为曲线 | 1D/2D/3D 对流演化 |
 | `mesh_advection` | 曲边混合网格上的标量云图 | 标量传播 |
-| `schrodinger` | 一维概率密度曲线/二维概率密度云图及波函数实部 | 波包传播、势阱振荡和双缝干涉 |
+| `schrodinger` | 一维概率密度曲线及波函数实部 | 波包传播、势阱振荡和势垒散射 |
+| `quantum_double_slit` | 二维概率密度和远场角分布 | 量子双缝波包散射与论文结果对照 |
 | `mie_cylinder` | 瞬时散射 Ez，以及采样所得散射 Ez 相量幅值 | 瞬时散射 Ez 从启动到结束的演化 |
 | `cylinder_flow` | 二维圆柱绕流涡量 | 全局物理时间推进的脱涡过程，见[运行参数](cylinder_flow/README.md) |
 

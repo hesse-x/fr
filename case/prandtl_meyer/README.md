@@ -1,8 +1,8 @@
 # 普朗特–迈耶膨胀波
 
-入口：[prandtl_meyer.py](../prandtl_meyer.py)。以下命令均从仓库根目录执行。
+入口：[solve.py](solve.py)。以下命令均从仓库根目录执行。
 
-`case/prandtl_meyer.py`：`PrandtlMeyerFan` 为解析解与参考状态，`PrandtlMeyerCase` 通过已有 `CartesianFR`、Euler、Rusanov 及 SSPRK(4,3) 接口组装算例；没有修改空间离散或添加源项。可从 `case.prandtl_meyer` 导入两个类。
+`case/prandtl_meyer/solve.py`：`PrandtlMeyerFan` 为解析解与参考状态，`PrandtlMeyerCase` 通过已有 `CartesianFR`、Euler、Rusanov 及 SSPRK(4,3) 接口组装算例；没有修改空间离散或添加源项。可从 `case.prandtl_meyer` 导入两个类。
 
 默认来流 `M1=2.5`、`gamma=1.4`、`rho1=p1=1`，流向沿正 x；从原点绕凸角顺时针转向 `15°`。参数选用 [NASA NPARC 的 Mach 2.5 / 15° 验证案例](https://www.grc.nasa.gov/www/wind/valid/pm15/pm15.html)；此处仅采用其无量纲参数和解析参考关系，并未复现 NASA 的拐角网格、边界条件或数值方法。该膨胀满足等熵关系，马赫数增加、静压下降，参考 [NASA 膨胀扇说明](https://www.grc.nasa.gov/WWW/BGH/expans.html)。
 

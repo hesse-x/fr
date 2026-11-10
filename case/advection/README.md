@@ -1,6 +1,6 @@
 # 周期标量平流（1D / 2D / 3D）
 
-入口：[advection.py](../advection.py)。以下命令均从仓库根目录执行。
+入口：[solve.py](solve.py)。以下命令均从仓库根目录执行。
 
 周期标量平流用于验证 Cartesian 1D/2D/3D 通量接口、时间推进与全局质量守恒。
 

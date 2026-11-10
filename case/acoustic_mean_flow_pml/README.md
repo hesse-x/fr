@@ -1,8 +1,8 @@
 # 固定网格背景流与现有 PML
 
-入口：[acoustic_mean_flow_pml.py](../acoustic_mean_flow_pml.py)。以下命令均从仓库根目录执行。
+入口：[solve.py](solve.py)。以下命令均从仓库根目录执行。
 
-`case/acoustic_mean_flow_pml.py`。本例直接把现有 `SplitPML` 用于带背景对流的声学通量。阻尼源项、剖面、方向拆分和外边界包装均沿用现有实现。
+`case/acoustic_mean_flow_pml/solve.py`。本例直接把现有 `SplitPML` 用于带背景对流的声学通量。阻尼源项、剖面、方向拆分和外边界包装均沿用现有实现。
 
 ```bash
 source venv/bin/activate

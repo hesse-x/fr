@@ -1,6 +1,6 @@
 # Gmsh 网格生成
 
-入口：[mesh_generation.py](../mesh_generation.py)。以下命令均从仓库根目录执行。
+入口：[solve.py](solve.py)。以下命令均从仓库根目录执行。
 
 本工具生成贴体介电圆柱的曲边四边形/三角形网格，或一般不规则四边形网格。
 它只生成几何和网格，不求解物理场；实际读入网格后的平流验证见[mesh_advection](../mesh_advection/README.md)。

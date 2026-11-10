@@ -1,0 +1,12 @@
+{
+  "calibration_roundtrip_max_error": 2.1316282072803006e-14,
+  "trace_points": 904,
+  "visible_ink_points": 775,
+  "max_visible_point_distance_to_ink_pixels": 4.123105625617661,
+  "complete_curve_points": 3201,
+  "complete_curve_range": [
+    -80.0,
+    80.0
+  ],
+  "uses_peak_estimate_anchors": false
+}

@@ -2,7 +2,7 @@ import math
 import unittest
 import torch
 from fr import make_equation,Mesh2D,MeshFR2D,normal_central
-from case.cylinder_exact import CylinderSeries,cylindrical_functions
+from case.mie_cylinder.exact import CylinderSeries,cylindrical_functions
 from case.mie_cylinder import CylinderScattering
 
 

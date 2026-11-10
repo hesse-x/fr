@@ -1,6 +1,6 @@
 # 二维柱面声脉冲与随流移动 PML
 
-入口：[acoustic_pml.py](../acoustic_pml.py)。以下命令均从仓库根目录执行。
+入口：[solve.py](solve.py)。以下命令均从仓库根目录执行。
 
 ```bash
 source venv/bin/activate

@@ -1,7 +1,7 @@
-"""Five time-dependent Schrodinger benchmarks, hbar=m=1.
+"""Four one-dimensional time-dependent Schrodinger benchmarks, hbar=m=1.
 
 python -m case.schrodinger --case gaussian --convergence --no-plot
-python -m case.schrodinger --case double-slit
+python -m case.schrodinger --case barrier
 """
 import argparse
 import csv
@@ -14,8 +14,8 @@ from fr.equations.schrodinger import Schrodinger
 from fr.plotting import PlotRecorder, add_plot_arguments
 
 
-NAMES = ('gaussian', 'harmonic', 'well', 'barrier', 'double-slit')
-DEFAULT_TIME = dict(gaussian=2., harmonic=2*math.pi, well=4/(3*math.pi), barrier=4., **{'double-slit': 3.})
+NAMES = ('gaussian', 'harmonic', 'well', 'barrier')
+DEFAULT_TIME = dict(gaussian=2., harmonic=2*math.pi, well=4/(3*math.pi), barrier=4.)
 
 
 def state(psi):
@@ -34,11 +34,10 @@ class SchrodingerCase:
             raise ValueError(f'choose one of {NAMES}')
         self.name = name
         self.final_time = DEFAULT_TIME[name]
-        dim = 2 if name == 'double-slit' else 1
-        n = (32 if dim == 2 else (16 if name == 'well' else 48)) if n is None else n
-        bounds = ((-12., 12.), (-8., 8.)) if dim == 2 else (((0., 1.),) if name == 'well' else ((-16., 16.),))
+        n = (16 if name == 'well' else 48) if n is None else n
+        bounds = ((0., 1.),) if name == 'well' else ((-16., 16.),)
         # FR grid only supplies geometry and reference operators here.
-        self.grid = CartesianFR((n,)*dim, bounds, p, flux=lambda U,a: U,
+        self.grid = CartesianFR((n,), bounds, p, flux=lambda U,a: U,
                                 numerical_flux=central, periodic=False,
                                 boundary=lambda c,U,a,s,t: -U)
         self.ldg = CartesianLDG(self.grid, boundary=lambda c,U,a,s,t: torch.zeros_like(U))
@@ -52,11 +51,6 @@ class SchrodingerCase:
         if self.name == 'barrier':
             # Faces align with both edges for default n=48.
             return 6.*((x >= 0.) & (x < 2/3)).to(x.dtype)
-        if self.name == 'double-slit':
-            y = coords[1]
-            # Finite-height screen, two apertures centered at y=+-1.5.
-            openings = ((y-1.5).abs() < .5) | ((y+1.5).abs() < .5)
-            return 30.*((x >= 0.) & (x < .75) & ~openings).to(x.dtype)
         return torch.zeros_like(x)
 
     def exact(self, t):
@@ -76,10 +70,7 @@ class SchrodingerCase:
 
     def packet(self):
         x = self.grid.coords[0]
-        if self.name == 'barrier':
-            return state(gaussian(x, 0., x0=-6., k=3., sigma=.8))
-        y = self.grid.coords[1]
-        return state(gaussian(x, 0., x0=-6., k=4., sigma=.8)*gaussian(y, 0., x0=0., k=0., sigma=2.))
+        return state(gaussian(x, 0., x0=-6., k=3., sigma=.8))
 
     def timestep(self):
         # Conservative explicit RK4 bound: LDG spectral scale ~ (p+1)^4/h^2.
@@ -112,9 +103,9 @@ class SchrodingerCase:
         if self.name in ('gaussian','harmonic','well'):
             error = U-self.exact(final_time)
             stats['complex_l2_error'] = float(s.integral(error.square().sum(-1,keepdim=True))[0].sqrt())
-        if self.name in ('barrier','double-slit'):
+        if self.name == 'barrier':
             x = s.coords[0]
-            edge = 2/3 if self.name == 'barrier' else .75
+            edge = 2/3
             stats['left_probability'] = float(s.integral(density*(x<0)[...,None])[0])/mass0
             stats['screen_probability'] = float(s.integral(density*((x>=0)&(x<edge))[...,None])[0])/mass0
             stats['right_probability'] = float(s.integral(density*(x>=edge)[...,None])[0])/mass0

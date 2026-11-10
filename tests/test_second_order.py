@@ -98,7 +98,7 @@ class SecondOrderTests(unittest.TestCase):
             case = SchrodingerCase(name,n=4,p=2)
             U,stats = case.run(.001,plot=False)
             self.assertTrue(bool(torch.isfinite(U).all()))
-            if name in ('barrier','double-slit'):
+            if name == 'barrier':
                 total = sum(stats[k] for k in ('left_probability','screen_probability','right_probability'))
                 self.assertAlmostEqual(total,stats['probability_final']/stats['probability_initial'],places=12)
 

@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 import torch
 from fr.equations import make_equation
-from .acoustic_pml import AcousticPMLCase
+from ..acoustic_pml import AcousticPMLCase
 
 
 class MeanFlowPMLCase(AcousticPMLCase):

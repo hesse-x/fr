@@ -10,8 +10,8 @@ import torch
 from fr import Mesh2D,MeshFR2D,make_equation,integrate
 from fr.pml import SplitPML
 from fr.gmsh import generate_mesh
-from .mesh_generation import cylinder_quad_geometry
-from .cylinder_exact import CylinderSeries,cylindrical_functions
+from ..mesh_generation import cylinder_quad_geometry
+from .exact import CylinderSeries,cylindrical_functions
 
 
 class CylinderScattering:

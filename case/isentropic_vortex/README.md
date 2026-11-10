@@ -1,8 +1,8 @@
 # 二维等熵涡平移
 
-入口：[isentropic_vortex.py](../isentropic_vortex.py)。以下命令均从仓库根目录执行。
+入口：[solve.py](solve.py)。以下命令均从仓库根目录执行。
 
-`case/isentropic_vortex.py`：`IsentropicVortex` 提供随时间平移的解析场，`IsentropicVortexCase` 组装二维 Euler、双周期边界、Rusanov 面通量和 SSPRK(4,3)。两者可从 `case.isentropic_vortex` 导入。公式采用标准 Shu 等熵涡，参考 [HyPar 官方算例](https://hypar.github.io/a00160.html)；周期盒需要足够大以忽略邻域涡的影响，参见 [PLUTO 官方说明](https://plutocode.ph.unito.it/Doxygen/Test_Problems/_h_d_2_isentropic___vortex_2init_8c.html)。
+`case/isentropic_vortex/solve.py`：`IsentropicVortex` 提供随时间平移的解析场，`IsentropicVortexCase` 组装二维 Euler、双周期边界、Rusanov 面通量和 SSPRK(4,3)。两者可从 `case.isentropic_vortex` 导入。公式采用标准 Shu 等熵涡，参考 [HyPar 官方算例](https://hypar.github.io/a00160.html)；周期盒需要足够大以忽略邻域涡的影响，参见 [PLUTO 官方说明](https://plutocode.ph.unito.it/Doxygen/Test_Problems/_h_d_2_isentropic___vortex_2init_8c.html)。
 
 默认 `gamma=1.4`、涡强度 `beta=5`、背景速度 `(1,1)`、初始涡心 `(0,0)`，远场 `rho=p=T=1`。计算域为 `[-10,10]²`、`p=3`，每单元 4×4 个 Gauss 解点。
 

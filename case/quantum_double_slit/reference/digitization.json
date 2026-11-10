@@ -1,0 +1,70 @@
+{
+  "version": 2,
+  "source_sha256": "b80af1b0e2e6f0ec212097d2b67207e1aceca8768267a8da27357f6be7774b29",
+  "source_size": [
+    1117,
+    798
+  ],
+  "source_pdf_page": 7,
+  "render_dpi": 300,
+  "crop": [
+    93,
+    93,
+    1210,
+    891
+  ],
+  "angle_ticks": [
+    -80.0,
+    -60.0,
+    -40.0,
+    -20.0,
+    0.0,
+    20.0,
+    40.0,
+    60.0,
+    80.0
+  ],
+  "bottom_tick_x": [
+    265.0,
+    356.0,
+    443.0,
+    529.5,
+    613.5,
+    700.5,
+    789.0,
+    875.5,
+    962.0
+  ],
+  "top_tick_x": [
+    270.5,
+    359.5,
+    447.5,
+    533.5,
+    617.5,
+    704.5,
+    793.5,
+    880.5,
+    966.5
+  ],
+  "raw_trace_rows": 4935,
+  "angle_bins": 904,
+  "angle_bin_width": 0.1,
+  "status_codes": {
+    "1": "separated_dash",
+    "2": "overlap",
+    "3": "axis_normalization",
+    "4": "dash_gap"
+  },
+  "status_counts": {
+    "1": 35,
+    "2": 740,
+    "3": 1,
+    "4": 128
+  },
+  "notes": [
+    "No FR solution or theoretical diffraction formula is read.",
+    "Lobe windows constrain image regions, not numerical peak heights.",
+    "Overlapping ink does not identify the authors numerical curve uniquely.",
+    "No precise method ranking is justified by these image traces."
+  ]
+}

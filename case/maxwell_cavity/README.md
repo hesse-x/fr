@@ -1,8 +1,8 @@
 # 三维 PEC 腔体电磁驻波
 
-入口：[maxwell_cavity.py](../maxwell_cavity.py)。以下命令均从仓库根目录执行。
+入口：[solve.py](solve.py)。以下命令均从仓库根目录执行。
 
-通用方程位于 `fr/equations/maxwell.py`（兼容 `fr.maxwell` 和 `from fr import Maxwell`）和算例 `case/maxwell_cavity.py`。算例实际使用三维 FR、长方体六个物理壁面和随时间振荡的解析本征模，不是用解析外部状态覆盖边界。当前介质为均匀、各向同性、无损材料，无源、无电荷；不包含介质界面、导电率或散度清理。
+通用方程位于 `fr/equations/maxwell.py`（兼容 `fr.maxwell` 和 `from fr import Maxwell`）和算例 `case/maxwell_cavity/solve.py`。算例实际使用三维 FR、长方体六个物理壁面和随时间振荡的解析本征模，不是用解析外部状态覆盖边界。当前介质为均匀、各向同性、无损材料，无源、无电荷；不包含介质界面、导电率或散度清理。
 
 默认配置：边长 `(1,1.3,1.7)`、模态指标 `(1,1,1)`、`epsilon=mu=1`（归一化波速 `c=1`）、每方向 4 个单元、三次多项式、每单元 `4³=64` 个解点、中心面通量和 SSPRK(4,3)，计算一个完整振荡周期。保留现有 RK，不对其耗散作额外修正。
 

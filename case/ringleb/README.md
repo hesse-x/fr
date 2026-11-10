@@ -1,6 +1,6 @@
 # Ringleb 亚声速流
 
-入口：[ringleb.py](../ringleb.py)。以下命令均从仓库根目录执行。
+入口：[solve.py](solve.py)。以下命令均从仓库根目录执行。
 
 ```bash
 python -m case.ringleb --n 8 --p 3 --time .1
