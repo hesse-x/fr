@@ -9,16 +9,17 @@
 #include "rk_sink.hpp"
 #include "avx2.hpp"
 #include "boundaries.hpp"
+#include "sgs.hpp"
 using simd::Vec;
 
 namespace fr_ldg {
 constexpr int Q=4, N=64, F=16;
-template<bool Local,class Output=fr_output::Raw>
+template<bool Local,class Output=fr_output::Raw,bool ScanOnly=false>
 inline void group(const double* input,const double* convection,double* output,int64_t elements,int g,
     const int64_t* offsets,const int64_t* primitive_ids,const int64_t* active_meta,const int64_t* owned_meta,
     const double* widths,const double* L,const double* R,const double* primal,const double* dual,
     const double* gl,const double* gr,double gamma,double mu,double kappa,double wall_temperature,
-    double forcing,double* scratch,double* timing,Output sink={}) {
+    double forcing,double* scratch,double* timing,Output sink={},double* diffusion_ratio=nullptr,fr_sgs::Config sgs={}) {
     double pack_total=0,gradient_total=0,flux_total=0,divergence_total=0,store_total=0;
             int64_t os=offsets[g*3],as=offsets[g*3+1],bs=offsets[g*3+2];
             int no=offsets[(g+1)*3]-os,na=offsets[(g+1)*3+1]-as,nb=offsets[(g+1)*3+2]-bs;
@@ -28,6 +29,7 @@ inline void group(const double* input,const double* convection,double* output,in
             double* flux=gradient+12*gs;
             double* viscous=flux+4*gs;
             double* wall_work=viscous+4*vs;
+            double* sgs_mu=wall_work+vs;
             // Owned cells need all directions. A halo cell only needs the
             // flux directions consumed by owned cells' dual traces.
             static thread_local std::vector<unsigned char> needed;
@@ -60,6 +62,7 @@ inline void group(const double* input,const double* convection,double* output,in
             auto gradient_sweep = [&](auto wall_tag) {
                 constexpr bool Wall=decltype(wall_tag)::value;
                 for(int axis=0;axis<3;++axis) for(int e=0;e<na;++e) {
+                    if constexpr(ScanOnly) { if(e>=no) continue; }
                     const int64_t* meta=active_meta+(as+e)*5;
                     if(bool(axis==1 && (meta[3] || meta[4]))!=Wall) continue;
                     int64_t old=primitive_ids[bs+e];
@@ -68,7 +71,11 @@ inline void group(const double* input,const double* convection,double* output,in
                         // Diagonal velocity derivatives enter every stress trace;
                         // off-diagonals enter row/column directions, dT only its row.
                         int mask=c==3 ? (1<<axis) : (axis==c ? 7 : (1<<axis)|(1<<c));
+#if FR_NS_VREMAN || FR_NS_SMAGORINSKY
+                        if(c==3 && (ScanOnly || !(needed[e]&mask))) continue;
+#else
                         if(!(needed[e]&mask)) continue;
+#endif
                         const double* field=primitive+c*ps+e*N;
                         for(int f=0;f<F;f+=4) {
                             Vec lines[4],updated[4];
@@ -94,14 +101,19 @@ inline void group(const double* input,const double* convection,double* output,in
             gradient_sweep(std::true_type{});
 #else
             for(int axis=0;axis<3;++axis) for(int e=0;e<na;++e) {
-                const int64_t* meta=active_meta+(as+e)*5;
+                if constexpr(ScanOnly) { if(e>=no) continue; }
+                    const int64_t* meta=active_meta+(as+e)*5;
                 int64_t old=primitive_ids[bs+e];
                 double scale=2/widths[old*3+axis];
                 for(int c=0;c<4;++c) {
                     // Diagonal velocity derivatives enter every stress trace;
                     // off-diagonals enter row/column directions, dT only its row.
                     int mask=c==3 ? (1<<axis) : (axis==c ? 7 : (1<<axis)|(1<<c));
-                    if(!(needed[e]&mask)) continue;
+#if FR_NS_VREMAN || FR_NS_SMAGORINSKY
+                        if(c==3 && (ScanOnly || !(needed[e]&mask))) continue;
+#else
+                        if(!(needed[e]&mask)) continue;
+#endif
                     const double* field=primitive+c*ps+e*N;
                     for(int f=0;f<F;f+=4) {
                         Vec lines[4],updated[4];
@@ -124,6 +136,40 @@ inline void group(const double* input,const double* convection,double* output,in
             }
 #endif
             if(timing) { gradient_total+=fr_parallel::wall_time()-t; t=fr_parallel::wall_time(); }
+#if FR_NS_VREMAN || FR_NS_SMAGORINSKY
+            if constexpr(ScanOnly) {
+                double maximum=1.;
+                const double molecular_pr=mu*gamma/((gamma-1)*kappa);
+                for(int e=0;e<no;++e) {
+                    int64_t old=primitive_ids[bs+e];
+                    double delta=std::cbrt(widths[old*3]*widths[old*3+1]*widths[old*3+2])/Q*sgs.filter_scale;
+                    for(int n=0;n<N;n+=4) {
+                        Vec mu_t=fr_sgs::viscosity<fr_sgs::compiled_model>(gradient,gs,e*N+n,delta,simd::load(input+old*N+n),sgs);
+                        Vec ratio=simd::maximum(Vec(1.)+mu_t/mu,
+                            Vec(1.)+mu_t*(molecular_pr/(mu*sgs.turbulent_prandtl)));
+                        double lanes[4]; simd::store(lanes,ratio);
+                        for(double value:lanes) {
+                            if(!std::isfinite(value)) { *diffusion_ratio=INFINITY; return; }
+                            maximum=std::max(maximum,value);
+                        }
+                    }
+                }
+                *diffusion_ratio=maximum;
+                return;
+            }
+#endif
+
+#if FR_NS_VREMAN || FR_NS_SMAGORINSKY
+            // One constitutive evaluation per point; reuse for all three flux directions.
+            for(int e=0;e<na;++e) {
+                int64_t old=primitive_ids[bs+e];
+                double delta=std::cbrt(widths[old*3]*widths[old*3+1]*widths[old*3+2])/Q*sgs.filter_scale;
+                for(int n=0;n<N;n+=4)
+                    simd::store(sgs_mu+e*N+n,fr_sgs::viscosity<fr_sgs::compiled_model>(
+                        gradient,gs,e*N+n,delta,simd::load(input+old*N+n),sgs));
+            }
+#endif
+
             for(int axis=0;axis<3;++axis) {
                 // Halo gradients are recomputed privately, so no global
                 // gradient/stress arrays or cross-worker synchronization.
@@ -131,18 +177,24 @@ inline void group(const double* input,const double* convection,double* output,in
                     if(!(needed[e]&(1<<axis))) continue;
                     for(int n=0;n<N;n+=4) {
                         int at=e*N+n;
+                        Vec effective_mu=mu, effective_kappa=kappa;
+#if FR_NS_VREMAN || FR_NS_SMAGORINSKY
+                        Vec mu_t=simd::load(sgs_mu+at);
+                        effective_mu=effective_mu+mu_t;
+                        effective_kappa=effective_kappa+mu_t*(gamma/(gamma-1)/sgs.turbulent_prandtl);
+#endif
                         Vec tr=(simd::load(gradient+at)+simd::load(gradient+5*gs+at))+simd::load(gradient+10*gs+at);
                         Vec stress[3];
                         for(int c=0;c<3;++c) {
                             Vec correction=c==axis ? (2./3.)*tr:Vec(0.);
-                            stress[c]=mu*((simd::load(gradient+(axis*4+c)*gs+at)+
+                            stress[c]=effective_mu*((simd::load(gradient+(axis*4+c)*gs+at)+
                                            simd::load(gradient+(c*4+axis)*gs+at))-correction);
                             simd::store(flux+c*gs+at,stress[c]);
                         }
                         Vec work=((Vec(0.)+simd::load(primitive+e*N+n)*stress[0])+
                                   simd::load(primitive+ps+e*N+n)*stress[1])+
                                   simd::load(primitive+2*ps+e*N+n)*stress[2];
-                        simd::store(flux+3*gs+at,work+kappa*simd::load(gradient+(axis*4+3)*gs+at));
+                        simd::store(flux+3*gs+at,work+effective_kappa*simd::load(gradient+(axis*4+3)*gs+at));
                         if(axis==1 && e<no) simd::store(wall_work+e*N+n,work);
                     }
                 }

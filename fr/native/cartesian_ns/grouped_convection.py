@@ -16,9 +16,9 @@ from .native_build import header_bytes, compiler_flags, locality_options
 _LIBRARIES = {}
 
 
-def load_library(boundary_mode='separate'):
+def load_library(boundary_mode='separate', interface_flux='rusanov', anti_alias=(), quadrature_order=None):
     source = Path(__file__).with_name('kernels')/'grouped_convection.cpp'
-    flags = compiler_flags(boundary_mode)
+    flags = compiler_flags(boundary_mode, interface_flux=interface_flux, anti_alias=anti_alias, quadrature_order=quadrature_order)
     key = hashlib.sha256(source.read_bytes()+header_bytes()+torch.__version__.encode()+' '.join(flags).encode()).hexdigest()[:16]
     if key in _LIBRARIES:
         return _LIBRARIES[key]
@@ -34,7 +34,7 @@ def load_library(boundary_mode='separate'):
         result.check_returncode()
     library = ctypes.CDLL(str(target))
     p = ctypes.c_void_p
-    library.grouped_convection.argtypes = [p, p, ctypes.c_int64]+[p]*12+[
+    library.grouped_convection.argtypes = [p, p, ctypes.c_int64]+[p]*14+[
         ctypes.c_double, ctypes.c_int, ctypes.c_int, ctypes.c_int, p]
     library.grouped_convection.restype = None
     library.build_directory = str(build)
@@ -59,7 +59,7 @@ class GroupedConvection:
         nx, ny, nz = self.cells
         self.count = nx*ny*nz
         self.gamma = model.eq.gamma
-        self.library = load_library(boundary_mode)
+        self.library = load_library(boundary_mode, getattr(model, 'interface_flux', 'rusanov'), model.s.anti_alias, model.s.quadrature_order)
         self.group_offsets, self.face_offsets = [0], [0]
         owned, faces, cell_faces = [], [], []
         for corner in itertools.product(*(range(0, n, b) for n, b in zip(self.cells, block))):
@@ -104,11 +104,14 @@ class GroupedConvection:
         self.buffers = [integer(self.group_offsets), integer(owned),
                         integer(self.face_offsets), integer(faces), integer(cell_faces),
                         widths, model.s.L.contiguous(), model.s.R.contiguous(), matrix,
-                        model.s.gl.contiguous(), model.s.gr.contiguous(), reference]
+                        model.s.gl.contiguous(), model.s.gr.contiguous(), reference,
+                        model.s.interpolation.contiguous() if model.s.anti_alias else model.s.z.new_empty(0),
+                        model.s.projection.contiguous() if model.s.anti_alias else model.s.z.new_empty(0)]
         face_state_slots = 10*16 if locality_options()['face_local'] else 10*self.max_faces*16
-        self.scratch_bytes_per_worker = 8*(19*self.max_cells*64+face_state_slots+5*self.max_faces*16)
-        self.metadata = dict(block=list(block), groups=self.groups,
+        self.scratch_bytes_per_worker = 8*((29 if 'flux' in model.s.anti_alias else 19)*self.max_cells*64+face_state_slots+5*self.max_faces*16)
+        self.metadata = dict(interface_flux=getattr(model, 'interface_flux', 'rusanov'), block=list(block), groups=self.groups,
                              max_cells=self.max_cells, max_interfaces=self.max_faces,
+                             anti_alias=sorted(model.s.anti_alias), quadrature_order=model.s.quadrature_order,
                              scratch_bytes_per_worker=self.scratch_bytes_per_worker,
                              packed_interfaces=len(faces), build_directory=self.library.build_directory)
 

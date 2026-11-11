@@ -1,7 +1,8 @@
 """Cartesian FR compressible NS with configurable viscosity and backend presets."""
 import math
 import torch
-from .core import CartesianFR, rusanov_flux
+from .core import CartesianFR
+from .fluxes import make_numerical_flux
 from .viscous import make_viscous_operator
 from .equations.navier_stokes import NavierStokes
 
@@ -11,12 +12,14 @@ class CartesianNavierStokes:
 
     ``rhs`` is the independent Torch reference. ``make_stepper`` selects
     ``torch`` or the CPU FP64 SoA p=3 ``native-p3`` execution preset.
-    Flux dealiasing is supported by Torch only; native rejects it explicitly.
+    ``interface_flux='rusanov'`` and ``anti_alias='none'`` preserve the baseline.
+    Roe faces and volume/surface flux overintegration are independent options,
+    supported by both Torch and the native preset.
     """
     def __init__(self, cells, bounds, p=3, *, mu=1/1600, gamma=1.4, prandtl=.71,
                  boundary='periodic', wall_temperature=None, forcing=0.,
                  device='cpu', edges=None, anti_alias='none', quadrature_order=None,
-                 reference_state=None, viscous_scheme='ldg', penalty=4.):
+                 reference_state=None, viscous_scheme='ldg', penalty=4., interface_flux='rusanov'):
         if len(cells) != 3:
             raise ValueError('CartesianNavierStokes requires a three-dimensional grid')
         if boundary not in ('periodic', 'isothermal-channel'):
@@ -27,13 +30,16 @@ class CartesianNavierStokes:
         if not math.isfinite(forcing):
             raise ValueError('finite uniform x force per volume required')
         self.eq = NavierStokes(3, gamma=gamma, mu=mu, prandtl=prandtl)
+        if interface_flux not in ('rusanov', 'roe'):
+            raise ValueError('interface_flux must be rusanov or roe')
+        self.interface_flux = interface_flux
         self.forcing = forcing
         self.boundary_preset = boundary
         self.temperature = wall_temperature if wall_temperature is not None else 1.
         self.volume = math.prod(b-a for a, b in bounds)
         periodic = (True, True, True) if boundary == 'periodic' else (True, False, True)
         self.s = CartesianFR(cells, bounds, p, flux=self.eq.flux,
-                             numerical_flux=rusanov_flux(self.eq.speed), speed=self.eq.speed,
+                             numerical_flux=make_numerical_flux(interface_flux, self.eq), speed=self.eq.speed,
                              periodic=periodic, boundary=self.wall, device=device, edges=edges,
                              anti_alias=anti_alias, quadrature_order=quadrature_order)
         self.viscous_operator = make_viscous_operator(self.s, self.eq,

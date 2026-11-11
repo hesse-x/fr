@@ -14,7 +14,7 @@ static void fused_impl(const double* input,double* output,int64_t elements,
     std::mutex timing_mutex;
     at::parallel_for(0, groups, 1, [&](int64_t begin, int64_t end) {
         int conv_capacity=fr_convection::scratch_capacity(max_cells,max_faces);
-        int ldg_capacity=(4*max_primitive+16*max_active+5*max_owned)*64;
+        int ldg_capacity=(4*max_primitive+(16+fr_sgs::extra_fields)*max_active+5*max_owned)*64;
         auto& conv_scratch=fr_scratch::buffer(conv_capacity,0);
         auto& ldg_scratch=fr_scratch::buffer(ldg_capacity,1);
         double local[8]={};
@@ -26,7 +26,8 @@ static void fused_impl(const double* input,double* output,int64_t elements,
                 static_cast<const double*>(conv[6]),static_cast<const double*>(conv[7]),
                 static_cast<const double*>(conv[8]),static_cast<const double*>(conv[9]),
                 static_cast<const double*>(conv[10]),static_cast<const double*>(conv[11]),
-                constants[0],conv_scratch.data(),timing ? local:nullptr);
+                constants[0],conv_scratch.data(),timing ? local:nullptr,
+                static_cast<const double*>(conv[12]),static_cast<const double*>(conv[13]));
             auto finish=[&](auto sink) {
             fr_viscous::group<true,decltype(sink)>(input,value.result,output,elements,g,
                 static_cast<const int64_t*>(ldg[0]),static_cast<const int64_t*>(ldg[1]),
@@ -36,7 +37,7 @@ static void fused_impl(const double* input,double* output,int64_t elements,
                 static_cast<const double*>(ldg[8]),static_cast<const double*>(ldg[9]),
                 static_cast<const double*>(ldg[10]),constants[0],constants[1],constants[2],
                 constants[3],constants[4],ldg_scratch.data(),timing ? local+3:nullptr,
-                sink);
+                sink,nullptr,{constants[5],constants[6],constants[7]});
             };
             if constexpr(RK) finish(fr_output::PartialRK{original,value.packed,pending,
                                                         value.count*64,coefficient,combined});

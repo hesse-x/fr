@@ -11,14 +11,15 @@ import subprocess
 import sys
 
 
-def main():
+def main(module='case.taylor_green_vortex',
+         default_output='results/taylor_green_vortex/ma03-n64-p3-t10-stats100'):
     parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument('--output', type=Path, default=Path('results/taylor_green_vortex/ma03-n64-p3-t10-stats100'))
+    parser.add_argument('--output', type=Path, default=Path(default_output))
     args, _ = parser.parse_known_args()
     args.output.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
-    command = [sys.executable, '-u', '-m', 'case.taylor_green_vortex', *sys.argv[1:]]
-    record = dict(command=command, started_utc=stamp, parent_pid=os.getpid(), cwd=os.getcwd())
+    command = [sys.executable, '-u', '-m', module, *sys.argv[1:]]
+    record = dict(command=command, started_utc=stamp, parent_pid=os.getpid(), cwd=os.getcwd(), cpu_affinity=sorted(os.sched_getaffinity(0)))
     (args.output/f'process-{stamp}.json').write_text(json.dumps(record, indent=2)+'\n')
     log_path = args.output/f'run-{stamp}.log'
     print(f'Log: {log_path}', flush=True)

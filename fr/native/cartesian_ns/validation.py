@@ -11,5 +11,3 @@ def validate_model(model):
     expected = {'periodic': (True, True, True), 'isothermal-channel': (True, False, True)}
     if expected.get(getattr(model, 'boundary_preset', None)) != s.periodic:
         raise ValueError('native-p3 supports periodic or stationary isothermal y-wall presets')
-    if s.anti_alias:
-        raise ValueError('native-p3 does not support flux dealiasing; select torch')

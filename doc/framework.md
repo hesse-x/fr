@@ -45,7 +45,7 @@ python -m unittest discover -s tests -v
 
 ### 适用范围与待支持功能
 
-- Euler 尚无激波限制器、正性保持器或 Roe 通量；非物理密度/压力会报错。Cartesian 可选通量去混叠，非结构入口使用积分点通量求值；去混叠不替代激波捕捉。
+- Euler 尚无激波限制器或正性保持器；非物理密度/压力会报错。Cartesian 可选通量去混叠，非结构入口使用积分点通量求值；去混叠不替代激波捕捉。
 - 二维非结构离散实现 DG/FR-DG 成员，尚无完整 VCJH 参数族、非共形面或三维非结构体网格。
 - 公共NS黏性接口支持Cartesian及二维曲边上的LDG/BR1加惩罚；通用Cartesian二阶接口尚无Neumann/Robin配置。公共Cartesian NS提供三向周期或y向恒温无滑移壁面；曲边NS通过边界值/通量回调处理壁面及远场。三维曲边网格尚未实现。
 - 固定网格斜向背景流直接复用 PML 属于数值实验，其一般稳定性和长时间完美匹配尚未证明。
@@ -121,10 +121,48 @@ U, valid, next_dt = stepper.advance_finish(U, 0., dt, cfl=.1)
 
 native 边界处理默认 `boundary_mode='separate'`，在组内分别遍历内部与边界面/单元，
 复用 scratch，不新增全域边界数组或同步；`'fused'` 保留为性能和正确性对照。
-不支持的阶数、设备、边界或通量去混叠会明确报错，不静默忽略配置。
+不支持的阶数、设备或边界会明确报错，不静默忽略配置。
+Rusanov/Roe 界面和体/面通量去混叠在这两条执行路径中均为公共可选项，见下节。
 几何可包含非均匀单元宽度。原生实现位于 `fr/native/cartesian_ns/`，导入不编译，
 首次构造时按源码、头文件、编译参数和 Torch 版本缓存到 `/tmp/fr-cartesian-ns-native/`。
 线程数由 `torch.set_num_threads` 控制；分组计划/步进器的调用需串行，不共享给并发任务。
+
+### 公共 NS 对流模式
+
+`CartesianNavierStokes` 的界面通量和去混叠是两个独立选项，各算例只传参，不复制算法：
+
+| 参数 | 默认值 | 可选模式 |
+|---|---|---|
+| `interface_flux` | `'rusanov'` | `'roe'` |
+| `anti_alias` | `'none'` | `'flux'`、`'surf-flux'`、`'flux, surf-flux'` |
+| `quadrature_order` | `None` | 每方向 Gauss 求积点数，至少 `p+1`；p=3 默认5点 |
+
+```python
+from fr import CartesianNavierStokes
+
+# 原计算方式：Rusanov 界面、无去混叠；Gauss 解点、Radau 修正、LDG 黏性。
+base = CartesianNavierStokes((16, 16, 16), ((-1., 1.),)*3, p=3)
+
+# 显式启用公共模式；其他算例可以使用相同参数。
+optional = CartesianNavierStokes(
+    (16, 16, 16), ((-1., 1.),)*3, p=3,
+    interface_flux='roe', anti_alias='flux, surf-flux', quadrature_order=6,
+)
+stepper = optional.make_stepper('native-p3')  # 或 'torch'
+```
+
+Roe 只替换界面数值通量；Gauss 解点、Radau 修正和黏性方法不变。
+过积分会改变单元内部及/或界面上的对流通量求值/投影，但不增加解自由度，
+不改变 SGS、黏性离散或时间推进。非线性有理通量的有限点求积只能减轻混叠。
+原生核在计划创建时选择缓存的特化；未启用时不分配加密求积场，不执行过积分。
+
+公共实现为 `fr.fluxes.make_numerical_flux`、`Euler.absolute_jacobian_action`、
+`CartesianFR`、`fr.operators.overintegration`，native 对应
+`fr/native/cartesian_ns/kernels/roe.hpp` 和 `dealiasing.hpp`。
+`TaylorGreenVortex`、`TaylorGreenVortexLES` 的类/运行入口直接转发这些选项；
+其默认值仍为 Rusanov、无去混叠。CLI 可用 `--interface-flux roe` 和
+`--anti-alias 'flux, surf-flux' --quadrature-order 6` 显式选择。
+数值模式写入运行配置，续算时检查一致性；旧的默认 Rusanov 检查点仍可读取。
 
 ### Cartesian FR-DG 离散
 
@@ -276,7 +314,7 @@ mesh = CartesianFR((8,8), ((0.,1.),)*2, p=3,
                    speed=eq.speed, periodic=True)
 ```
 
-`make_numerical_flux(name,eq)` 支持 `central`、`rusanov`、`lax-wendroff`；提供特征绝对 Jacobian 的线化 Euler、声学、Maxwell 还支持 `roe` / `upwind`。目前非线性 Euler 未实现 Roe，选择该组合会明确报错。也可传入自定义 `lambda minus,plus,axis: ...`，原样返回。Lax–Wendroff 需要在实际时间步确定后调用 `prepare_step`，见下文工具说明。
+`make_numerical_flux(name,eq)` 支持 `central`、`rusanov`、`lax-wendroff`；提供特征绝对 Jacobian 的线化 Euler、声学、Maxwell 还支持 `roe` / `upwind`。Cartesian 非线性 Euler/NS 已提供 Roe 平均特征分解，声学波加宽度 0.05c 的二次熵修正；接触/剪切波使用 |u_n|。也可传入自定义 `lambda minus,plus,axis: ...`，原样返回。Lax–Wendroff 需要在实际时间步确定后调用 `prepare_step`，见下文工具说明。
 
 完整线化 Euler 使用均匀背景 `rho0,p0,mean`，声速 `c0=sqrt(gamma*p0/rho0)`。独立的熵扰动 `rho' - p'/c0²` 和横向速度以背景流速对流；声学特例相当于令熵扰动为零。线化状态是扰动量，可为正或负。`from_acoustic` / `acoustic_state` 提供两种布局间的映射；线化方程的 `energy` 只统计声学能量，不包含独立熵扰动。
 
@@ -295,7 +333,7 @@ python -m case.acoustic_mean_flow_pml --equation linearized-euler --validate
 各 case 自行传入框架回调，原有 lambda 接口继续可用。工具包括：
 
 - `fr.fluxes.central`、`rusanov_flux(speed)`：中心与局部 Lax–Friedrichs 通量。
-- `roe_flux(absolute_jacobian_action)`：传入 `abs(A) @ jump` 的方程实现；声学已提供精确特征分解。声学静止介质的 Roe 与特征迎风等价；这不是 Euler Roe 的实现。
+- `roe_flux(absolute_jacobian_action)`：传入 `abs(A) @ jump` 的方程实现；声学已提供精确特征分解。声学静止介质的 Roe 与特征迎风等价；Euler/NS 提供独立的 Roe 平均实现。
 - `upwind_flux(velocity)`：常速度标量平流迎风；系统使用特征分解通量。
 - `LaxWendroffFlux(flux)`：Richtmyer 半步界面预测器，再求物理通量。与 FR + RK 组合后不等同于经典二阶有限体积 Lax–Wendroff 格式，也不保证任意 CFL 下稳定。通过 `integrate(..., prepare_step=...)` 在每个实际步长确定后调用 `face.prepare_step(dt, mesh.h)`，包含末步截断。
 - `fr.boundaries.extrapolate`、`prescribed(state)`、`per_face({(axis,side): callback}, default=...)`、`acoustic_wall`：分别为外推、给定状态、逐面组合和声学刚壁。已有 Maxwell PEC 回调仍可直接组合；周期边界仍通过网格 `periodic` 指定。
@@ -373,7 +411,7 @@ solver = MeshFR2D(mesh, p=3, flux=eq.flux,
 
 `Mesh2D.rectangle(nx,ny,kind='tri'|'quad'|'mixed',jitter=.2,seed=...)` 可直接构造抖动的不规则网格；`.mapped(lambda x,y: (X,Y), order=3)` 升阶几何后应用平滑映射。`write_svg` 输出实际采样的曲边网格预览。
 
-公共物理通量仍为 `eq.flux(U,axis)`。不规则网格的数值通量则为 `callback(minus,plus,unit_normal)`，返回沿当前单元**外法向**的通量；`NormalFace` 包含状态、该法向的物理通量、坐标、区域和曲线标签。公共方程新增 `normal_speed`，`make_normal_numerical_flux` 支持中心、Rusanov 和已提供法向特征分解的 Roe/迎风（非线性 Euler 仍未实现 Roe）。Cartesian 的 Lax–Wendroff 接口不直接套用于一般曲面。
+公共物理通量仍为 `eq.flux(U,axis)`。不规则网格的数值通量则为 `callback(minus,plus,unit_normal)`，返回沿当前单元**外法向**的通量；`NormalFace` 包含状态、该法向的物理通量、坐标、区域和曲线标签。公共方程新增 `normal_speed`，`make_normal_numerical_flux` 支持中心、Rusanov 和已提供法向特征分解的 Roe/迎风（非线性 Euler/NS 尚未提供一般法向 Roe；Cartesian Roe 不能直接替代此接口）。Cartesian 的 Lax–Wendroff 接口不直接套用于一般曲面。
 
 边界回调为 `boundary(coords,inside,unit_normal,physical_tag,t)`，可使用 `fr.boundaries.per_tag` 逐标签配置。体源为 `source(coords,U,t,region)`，在体积分点求值。时间推进继续使用公共 RK4 / SSPRK(4,3)。开放边界平流例使用随时间变化的解析外部状态，不使用周期面配对。
 
@@ -381,3 +419,27 @@ solver = MeshFR2D(mesh, p=3, flux=eq.flux,
 
 `tests/` 覆盖参考单元恒等式、多项式精确性、自由流保持、面通量平衡、非自治时间推进、解析解收敛、边界条件、PML 参考对照、二阶算子伴随性质与双缝指数推进验证。最近一次通用回归共 **83 项测试通过**，槽道专用回归另有 **23 项测试通过**。以下算例中的误差表是各自列明参数下的实测结果。
 
+
+### 公共 SGS 模型长度工具
+
+`fr.les.filter_width(grid, mode)` 和 `filter_width_scale(grid, mode)` 为三维
+Cartesian SGS 提供模型长度与相对原 `h_eff/(p+1)` 的缩放，`h_eff=(hx hy hz)^(1/3)`。
+`mode='dof'` 是原默认；实验性 `mode='gauss-center'` 取 `h_eff min|ξ_Gauss|/2`，
+是等体积立方体中心到最近一维 Gauss 解点的距离。
+偶数 p 含中心点，该模式会给零宽度，因此明确拒绝。
+它不改变解网格分辨率，也不是额外的显式场滤波。
+LES 算例通过 `--filter-width` 选择；native 应力、热通量及 CFL 扫描共享 runtime
+宽度缩放，默认模式保持旧算例与检查点兼容。
+
+实验性 `mode='half-dof'` 使用 `h_eff/[2(p+1)]`，对所有非负阶数有效；
+相对原宽度的缩放为0.5，SGS黏性强度为原来的1/4。该模式改变模型长度，
+不增加解自由度，也不能由Gauss求积的多项式精确次数推导为更高空间分辨率。
+
+
+静态 Smagorinsky 与 Vreman 共用 `fr.les.EddyViscosity` 的偏应力和热通量。
+`Smagorinsky(cs=0.1)` 采用 `μ_t=ρ(Cs Δ)² sqrt(2 Sᵈ:Sᵈ)`，
+其中 `Sᵈ` 为三维去迹应变率。Cartesian native-p3 按模型编译专门化，
+Cs 为运行时参数，完整速度梯度同时用于应力与扩散 CFL。
+LES 算例支持 `--sgs smagorinsky --cs 0.1 --filter-width dof --filter-ratio 2`：
+宽度为 `2 V_cell^(1/3)/(p+1)`，对应 HiFiLES 输入模板；倍率必须为有限正数，
+默认 1，并在非默认时记录到运行配置以校验续算。

@@ -84,3 +84,12 @@ NACA0012、圆柱和天线 native 已使用这些头文件；NACA0012 和圆柱�
 `fr/native/compressible.cpp` 的 Euler/BR1 NS 算子。channel-dns 的融合 native 推进复用
 Python 阶段表，保留其 SIMD、源项和局部残差输出路径。编译缓存必须把
 `fr.native.header_bytes()` 纳入摘要，以便公共头文件修改后重新构建。
+
+
+## 公共对流选项
+
+Cartesian Euler/NS 算例应复用公共界面通量和通量去混叠，不复制到 case：
+`interface_flux='rusanov'|'roe'`，`anti_alias='none'|'flux'|'surf-flux'|'flux, surf-flux'`，
+`quadrature_order` 指定求积点数。`CartesianNavierStokes` 的 Torch 和 native-p3 均支持。
+默认 Rusanov、无去混叠；算例可通过显式参数开启，不能因框架增加模式而更改旧默认。
+详见[公共 NS 对流模式](../doc/framework.md#公共-ns-对流模式)。

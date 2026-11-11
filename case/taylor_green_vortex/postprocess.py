@@ -173,6 +173,8 @@ def compare_runs(directories, output, *, reference=REFERENCE, plot=True):
     reference_curves['mean_temperature_normalized'] = np.array([r['Mean Temperature'] for r in ref])/ref[0]['Mean Temperature']
     reference_curves['entropy_change'] = np.array([r['Mean Entropy'] for r in ref])-ref[0]['Mean Entropy']
     reference_curves['epsilon_kinetic'] = -np.gradient(reference_curves['kinetic_energy'], rt, edge_order=2)
+    reference_curves['epsilon_modelled_viscous'] = reference_curves['epsilon_viscous']
+    reference_curves['epsilon_modelled_physical'] = reference_curves['epsilon_physical']
     results, curves = [], []
     for directory in directories:
         directory = Path(directory)
@@ -190,6 +192,9 @@ def compare_runs(directories, output, *, reference=REFERENCE, plot=True):
         own_curves = {name:np.array([r[name] for r in history]) for name in reference_curves
                       if all(name in r for r in history)}
         own_curves['epsilon_physical'] = np.array([r['epsilon_viscous']-r['pressure_dilatation'] for r in history])
+        if all('epsilon_sgs' in r for r in history):
+            own_curves['epsilon_modelled_viscous'] = np.array([r['epsilon_viscous']+r['epsilon_sgs'] for r in history])
+            own_curves['epsilon_modelled_physical'] = own_curves['epsilon_modelled_viscous']-np.array([r['pressure_dilatation'] for r in history])
         if all('mean_entropy' in r for r in history):
             own_curves['entropy_change'] = np.array([r['mean_entropy'] for r in history])-history[0]['mean_entropy']
         for name, ours in own_curves.items():
@@ -216,6 +221,14 @@ def compare_runs(directories, output, *, reference=REFERENCE, plot=True):
                 if len(differences) <= i:
                     differences.append(dict(time=float(t)))
                 differences[i].update({name:float(ours[i]), name+'_reference':float(expected[i]), name+'_error':float(error[i])})
+        # Reuse molecular DNS curves as zero-SGS totals in LES overlays, without
+        # changing the original DNS metric schema.
+        if 'epsilon_modelled_viscous' not in plot_data:
+            plot_data['epsilon_modelled_viscous'] = own_curves['epsilon_viscous']
+            plot_data['epsilon_modelled_physical'] = own_curves['epsilon_physical']
+        for name in ('epsilon_sgs', 'mu_sgs_mean', 'mu_sgs_over_mu_max', 'kinetic_budget_residual'):
+            if all(name in r for r in history):
+                plot_data[name] = np.array([r[name] for r in history])
         initial_mass, initial_energy = history[0]['mass'], history[0]['total_energy']
         summary = dict(directory=str(directory), config=config, final_time=float(times[-1]),
                        comparisons=metrics, diagnostic_samples=len(times),
@@ -228,12 +241,16 @@ def compare_runs(directories, output, *, reference=REFERENCE, plot=True):
                        reference_initialization='constant-density', initialization_mismatch=config['initialization'] != 'constant-density')
         if 'cells' in config:
             h_eff = max(2*math.pi/(n*(config['p']+1)) for n in config['cells'])
-            peak_viscous = max(r['epsilon_viscous'] for r in history)
+            peak_viscous = max(r['epsilon_viscous']+r.get('epsilon_sgs', 0.) for r in history)
             eta = ((1/config['reynolds'])**3/peak_viscous)**.25
             summary['resolution_estimate'] = dict(effective_spacing=h_eff,
                 smallest_mean_kolmogorov_eta=eta, spacing_over_eta=h_eff/eta,
                 nominal_kmax_eta=math.pi*eta/h_eff,
-                note='From volume-mean viscous dissipation; nominal Nyquist, not a FR resolution guarantee')
+                note='From volume-mean molecular plus modelled SGS dissipation; nominal Nyquist, not a FR resolution guarantee')
+        if all('epsilon_sgs' in r for r in history):
+            summary['les_note'] = ('K and enstrophy describe resolved fields; DNS reference is unfiltered. '
+                'Molecular terms remain separate; modelled totals add SGS stress dissipation. '
+                'No SGS kinetic-energy equation or filtered-DNS reference is available.')
         results.append(summary)
         write_csv(output/(directory.name+'-difference.csv'), differences)
         write_csv(output/(directory.name+'-metrics.csv'), [dict(quantity=name, **metric) for name, metric in metrics.items()])
@@ -262,6 +279,14 @@ def compare_runs(directories, output, *, reference=REFERENCE, plot=True):
                 ('kinetic_energy_unweighted', 'Unweighted kinetic energy'), ('max_vorticity', 'Maximum vorticity'),
                 ('uprime', 'Velocity RMS scale'), ('mean_temperature_normalized', 'Mean temperature / initial mean'),
                 ('entropy_change', 'Mean entropy diagnostic - initial mean')])]
+        if any('epsilon_sgs' in curve[3] for curve in curves):
+            groups.append(('les_dissipation', (2, 3), [
+                ('epsilon_modelled_viscous', 'Molecular + SGS stress dissipation'),
+                ('epsilon_modelled_physical', 'Molecular + SGS dissipation - pressure work'),
+                ('epsilon_sgs', 'SGS stress dissipation'),
+                ('mu_sgs_mean', 'Mean SGS dynamic viscosity'),
+                ('mu_sgs_over_mu_max', 'Maximum SGS / molecular viscosity'),
+                ('kinetic_budget_residual', 'Discrete kinetic budget residual')]))
         for stem, shape, panels in groups:
             fig, axes = plt.subplots(*shape, figsize=(5.3*shape[1], 3.8*shape[0]))
             for ax, (name, ylabel) in zip(axes.flat, panels):
@@ -272,10 +297,28 @@ def compare_runs(directories, output, *, reference=REFERENCE, plot=True):
                 ref_label = 'FLEXI p=7, 512³ nodes, Ma=0.1'
                 if name == 'epsilon_kinetic':
                     ref_label += ' (derivative of published K)'
-                ax.plot(rt, reference_curves[name], 'k--', linewidth=1.5, label=ref_label)
+                if name in reference_curves:
+                    ax.plot(rt, reference_curves[name], 'k--', linewidth=1.5, label=ref_label)
                 for label, config, times, data, history in available:
+                    options = config.get('model_options', {})
+                    model_name = options.get('sgs_model', 'none')
+                    if model_name == 'smagorinsky':
+                        model_name += f', Cs={options.get("cs", .1):g}'
+                    if model_name == 'vreman':
+                        model_name += f', Cv={options["cv"]:g}'
+                        if options.get('filter_width', 'dof') != 'dof':
+                            model_name += ', width='+options['filter_width']
+                    if options.get('filter_ratio', 1.) != 1.:
+                        model_name += f', width ratio={options["filter_ratio"]:g}'
+                    cells = '×'.join(map(str, config['cells'])) if 'cells' in config else '?'
+                    treatment = config.get('interface_flux', 'rusanov')
+                    aa = {v.strip() for v in config.get('anti_alias', 'none').split(',')}
+                    if aa != {'none'}:
+                        parts = ''.join(label for key,label in (('flux','V'),('surf-flux','S')) if key in aa)
+                        nq = config.get('quadrature_order') or (3*config['p']+2)//2
+                        treatment += f'+{parts}AA{nq}'
                     ax.plot(times, data[name], '-', marker='o', markersize=2, linewidth=1.2,
-                            label=f'FR p={config["p"]}, Ma={config["mach"]}')
+                            label=f'FR {cells}, p={config["p"]}, Ma={config["mach"]}, {treatment}, SGS={model_name}')
                 ax.set(xlabel='t U0/L', ylabel=ylabel, xlim=(0, max(c[2][-1] for c in available)))
                 ax.grid(alpha=.2)
                 ax.legend(fontsize=7)

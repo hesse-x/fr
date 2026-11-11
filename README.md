@@ -41,6 +41,7 @@ pip install -r requirements.txt
 | [case/cylinder_flow/](case/cylinder_flow/) | 二维圆柱层流绕流，默认 Re=100 非定常计算 | [README](case/cylinder_flow/README.md) |
 | [case/channel-dns/](case/channel-dns/) | 恒质量流量三维槽道湍流、扰动发展及平均场统计 | [README](case/channel-dns/README.md) |
 | [case/taylor_green_vortex/](case/taylor_green_vortex/) | 三向周期 NS 涡衰减，公共 native-p3、Ma=0.3及公开高分辨率参考对照；Ma=0.1/0.3均完成，含完整统计曲线及Mach数敏感性对照 | [README](case/taylor_green_vortex/README.md) |
+| [case/taylor_green_vertox_les/](case/taylor_green_vertox_les/) | Taylor–Green 涡显式 Vreman LES，默认 32³ 单元，native-p3/Torch、LDG，含亚格子耗散统计及网格验证说明 | [README](case/taylor_green_vertox_les/README.md) |
 
 ## 待实现算例
 

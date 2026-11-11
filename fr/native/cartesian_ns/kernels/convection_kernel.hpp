@@ -8,16 +8,22 @@
 #include "../../parallel.hpp"
 #include "avx2.hpp"
 #include "boundaries.hpp"
+#include "roe.hpp"
 using simd::Vec;
 
 namespace fr_convection {
 constexpr int Q=4, N=64, F=16, C=5;
 inline int scratch_capacity(int max_cells,int max_faces) {
+#if FR_NS_VOLUME_AA
+    return 29*max_cells*N+10*F+5*max_faces*F;
+#else
     return 19*max_cells*N+10*F+5*max_faces*F;
+#endif
 }
-template<int A>
+template<int A,int Points=F>
 void numerical(const double* minus, const double* plus, double* common,
                const double* offset, double gamma) {
+    constexpr int F=Points;
     for(int f=0;f<F;f+=4) {
         Vec rm=simd::load(minus+f),rp=simd::load(plus+f);
         Vec um=simd::load(minus+F+f)/rm,vm=simd::load(minus+2*F+f)/rm,wm=simd::load(minus+3*F+f)/rm;
@@ -25,24 +31,35 @@ void numerical(const double* minus, const double* plus, double* common,
         Vec pm=(gamma-1)*(simd::load(minus+4*F+f)-.5*rm*((um*um+vm*vm)+wm*wm));
         Vec pp=(gamma-1)*(simd::load(plus+4*F+f)-.5*rp*((up*up+vp*vp)+wp*wp));
         Vec am=A==0?um:A==1?vm:wm,ap=A==0?up:A==1?vp:wp;
+#if FR_NS_ROE
+        Vec dissipation[5];
+        fr_roe::dissipation<A,Points>(minus,plus,f,gamma,dissipation);
+#else
         Vec sm=simd::abs(am)+simd::sqrt(gamma*pm/rm);
         Vec sp=simd::abs(ap)+simd::sqrt(gamma*pp/rp);
         Vec speed=.5*simd::maximum(sm,sp);
+#endif
         for(int c=0;c<C;++c) {
             Vec minus_c=simd::load(minus+c*F+f),plus_c=simd::load(plus+c*F+f);
             Vec fm=minus_c*am,fp=plus_c*ap;
             if(c==A+1) { fm=fm+pm; fp=fp+pp; }
             if(c==4) { fm=fm+pm*am; fp=fp+pp*ap; }
+#if FR_NS_ROE
+            simd::store(common+c*F+f,(.5*(fm+fp)-.5*dissipation[c])-offset[c]);
+#else
             simd::store(common+c*F+f,(.5*(fm+fp)-speed*(plus_c-minus_c))-offset[c]);
+#endif
         }
     }
 }
+template<int Points=F>
 inline void solve_face(int axis,const double* minus,const double* plus,double* out,
                        const double* reference,double gamma) {
-    if(axis==0) numerical<0>(minus,plus,out,reference,gamma);
-    else if(axis==1) numerical<1>(minus,plus,out,reference+5,gamma);
-    else numerical<2>(minus,plus,out,reference+10,gamma);
+    if(axis==0) numerical<0,Points>(minus,plus,out,reference,gamma);
+    else if(axis==1) numerical<1,Points>(minus,plus,out,reference+5,gamma);
+    else numerical<2,Points>(minus,plus,out,reference+10,gamma);
 }
+#include "dealiasing.hpp"
 template<int A>
 void volume(const double* packed, const double* primitive, double* flux,
             int count, const double* offset) {
@@ -64,7 +81,8 @@ inline Group group(const double* input,int64_t elements,int g,
     const int64_t* group_offsets,const int64_t* cells,const int64_t* face_offsets,
     const int64_t* faces,const int64_t* cell_faces,const double* widths,
     const double* L,const double* R,const double* matrix,const double* gl,const double* gr,
-    const double* reference,double gamma,double* scratch,double* timing) {
+    const double* reference,double gamma,double* scratch,double* timing,
+    const double* interpolation=nullptr,const double* projection=nullptr) {
     double pack_total=0,face_total=0,volume_total=0;
             const int64_t start=group_offsets[g], end=group_offsets[g+1];
             const int count=end-start, stride=count*N;
@@ -73,7 +91,11 @@ inline Group group(const double* input,int64_t elements,int g,
             double* packed=scratch;
             double* primitive=packed+5*stride;
             double* flux=primitive+4*stride;
+#if FR_NS_VOLUME_AA
+            double* result=flux+15*stride;
+#else
             double* result=flux+5*stride;
+#endif
             double* face_states=result+5*stride;
             double* common=face_states+10*F;
             double t=timing ? fr_parallel::wall_time():0;
@@ -113,7 +135,12 @@ inline Group group(const double* input,int64_t elements,int g,
                         simd::store(face_state+(ghost*5+c)*F+n,value);
                     }
                 }
+#if FR_NS_SURFACE_AA
+                surface_overintegrated(axis,face_state,face_state+5*F,common+f*5*F,
+                                       reference,gamma,interpolation,projection);
+#else
                 solve_face(axis,face_state,face_state+5*F,common+f*5*F,reference,gamma);
+#endif
             }
             if(timing) { pack_total+=fr_parallel::wall_time()-t; t=fr_parallel::wall_time(); }
             if(timing) { face_total+=fr_parallel::wall_time()-t; t=fr_parallel::wall_time(); }
@@ -125,14 +152,22 @@ inline Group group(const double* input,int64_t elements,int g,
                 simd::store(primitive+2*stride+n,w);
                 simd::store(primitive+3*stride+n,(gamma-1)*(simd::load(packed+4*stride+n)-.5*rho*((u*u+v*v)+w*w)));
             }
+#if FR_NS_VOLUME_AA
+            volume_overintegrated(packed,flux,count,reference,gamma,interpolation,projection);
+#endif
             for(int axis=0;axis<3;++axis) {
+#if FR_NS_VOLUME_AA
+                const double* axis_flux=flux+axis*5*stride;
+#else
+                const double* axis_flux=flux;
                 if(axis==0) volume<0>(packed,primitive,flux,count,reference);
                 else if(axis==1) volume<1>(packed,primitive,flux,count,reference+5);
                 else volume<2>(packed,primitive,flux,count,reference+10);
+#endif
                 for(int c=0;c<C;++c) for(int e=0;e<count;++e) {
                     const int64_t left=cell_faces[(start+e)*6+axis*2];
                     const int64_t right=cell_faces[(start+e)*6+axis*2+1];
-                    const double* fc=flux+c*stride+e*N;
+                    const double* fc=axis_flux+c*stride+e*N;
                     const double* cl=common+left*5*F+c*F;
                     const double* cr=common+right*5*F+c*F;
                     double scale=2/widths[cells[start+e]*3+axis];

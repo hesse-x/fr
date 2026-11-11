@@ -13,9 +13,9 @@ from .native_build import header_bytes, compiler_flags, locality_options
 _LIBRARIES = {}
 
 
-def load_library(boundary_mode='separate', viscous_config=None):
+def load_library(boundary_mode='separate', viscous_config=None, sgs=None, interface_flux='rusanov', anti_alias=(), quadrature_order=None):
     source = Path(__file__).with_name('kernels')/'grouped_fused.cpp'
-    flags = compiler_flags(boundary_mode, viscous_config)
+    flags = compiler_flags(boundary_mode, viscous_config, sgs, interface_flux, anti_alias, quadrature_order)
     key = hashlib.sha256(source.read_bytes()+header_bytes()+torch.__version__.encode()+' '.join(flags).encode()).hexdigest()[:16]
     if key in _LIBRARIES:
         return _LIBRARIES[key]
@@ -54,15 +54,19 @@ class GroupedFused:
             bs = offsets[g][2]
             if not torch.equal(conv.buffers[1][start:end], ldg.buffers[1][bs:bs+end-start]):
                 raise ValueError('mismatched owned-cell order')
-        self.library = load_library(boundary_mode, model.viscous_config)
+        self.library = load_library(boundary_mode, model.viscous_config, getattr(model, 'sgs', None), getattr(model, 'interface_flux', 'rusanov'), model.s.anti_alias, model.s.quadrature_order)
         self.shape = tuple(model.s.shape)+(5,)
         self.count = ldg.count
         self.conv_pointers = (ctypes.c_void_p*len(conv.buffers))(*(v.data_ptr() for v in conv.buffers))
         self.ldg_pointers = (ctypes.c_void_p*len(ldg.buffers))(*(v.data_ptr() for v in ldg.buffers))
-        self.constants = (ctypes.c_double*5)(*ldg.constants)
+        self.constants = (ctypes.c_double*8)(*ldg.constants)
         self.metadata = dict(block=list(block), groups=conv.groups,
                              dependency_pruned_halo=ldg.metadata['dependency_pruned_halo'],
                              viscous_scheme=model.viscous_scheme, boundary_mode=boundary_mode,
+                             anti_alias=sorted(model.s.anti_alias), quadrature_order=model.s.quadrature_order,
+                             sgs_filter_width=ldg.metadata['sgs_filter_width'],
+                             sgs_filter_scale=ldg.metadata['sgs_filter_scale'],
+                             sgs_model=ldg.metadata['sgs_model'], interface_flux=getattr(model, 'interface_flux', 'rusanov'),
                              scratch_bytes_per_worker=conv.scratch_bytes_per_worker+
                              ldg.metadata['scratch_bytes_per_worker'],
                              global_convection_buffer_bytes_avoided=self.count*64*5*8,

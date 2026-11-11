@@ -97,11 +97,12 @@ $$
 
 - 中心通量：两侧物理通量平均。
 - Rusanov：中心通量减去最大局部波速乘状态跳跃的一半。
-- 特征Roe/upwind：由方程提供`|A|`或`|A_n|`作用；主要用于线性声学、线化Euler和Maxwell。
+- 特征Roe/upwind：由方程提供`|A|`或`|A_n|`作用；Cartesian Euler/NS、线性声学、线化Euler和Maxwell提供相应接口。
 - 标量迎风：按常速度符号选择上游通量。
 - Richtmyer/Lax–Wendroff面预测：以实际步长预测界面状态，再送入FR/RK；需调用`prepare_step`。
 
-非线性Euler目前没有Roe特征分解实现；不能因为选项名存在，就认为每种方程都支持全部通量。
+Cartesian Euler/NS 的 Roe 采用 Roe 平均，声学波使用宽度为 0.05c 的 Harten 二次熵修正；
+接触/剪切波保留 |u_n|。它不包含低 Mach 预处理。不规则网格 Euler/NS 的一般法向 Roe 尚未实现。
 
 ### 2.4 时间推进
 
@@ -263,7 +264,12 @@ native通过[viscous_kernel.hpp](../fr/native/cartesian_ns/kernels/viscous_kerne
 边界规则位于 [kernels/boundaries.hpp](../fr/native/cartesian_ns/kernels/boundaries.hpp)。
 默认`boundary_mode='separate'`在组内分别遍历内部与边界面/单元，继续复用scratch；
 它没有引入全域边界数组或额外全域同步。`'fused'`保留作对照。
-任意阶、GPU或通量去混叠应使用Torch参考路径；原生入口会拒绝不支持的配置。
+native-p3 与 Torch 均支持 `interface_flux='rusanov'|'roe'`，以及
+`anti_alias='none'|'flux'|'surf-flux'|'flux, surf-flux'`；默认仍为 Rusanov、无去混叠。
+原生界面 Roe 使用 [roe.hpp](../fr/native/cartesian_ns/kernels/roe.hpp)，
+体/面 Gauss 过积分与 L₂ 投影使用 [dealiasing.hpp](../fr/native/cartesian_ns/kernels/dealiasing.hpp)，
+复用公共 FR 插值/投影矩阵并保持解自由度不变。模式进入编译缓存键，默认分支不计算额外求积。
+任意阶或 GPU 应使用 Torch 参考路径；原生入口会拒绝不支持的配置。
 
 槽道及Taylor–Green共享这条NS路径；槽道的拉伸网格、初场、扰动、统计窗口和检查点调度留在算例。
 相应数据流与性能记录见 [channel-dns/algorithm.md](../case/channel-dns/algorithm.md) 和

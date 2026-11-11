@@ -34,8 +34,8 @@ class LaxWendroffFlux:
 def make_numerical_flux(name, equation):
     """Select interface treatment separately from the physical equation.
 
-    Custom callbacks pass through unchanged. Euler currently supplies Rusanov,
-    central and Richtmyer choices; Roe requires an equation's |A| action.
+    Custom callbacks pass through unchanged. Euler supplies Rusanov,
+    Roe, central and Richtmyer choices; Roe uses the equation's |A| action.
     """
     if callable(name):
         return name

@@ -14,7 +14,7 @@ class TaylorGreenVortex(CartesianNavierStokes):
     """rho0=U0=L=R=1; Ma changes background pressure, never Re or velocity."""
     def __init__(self, cells=(64, 64, 64), p=3, *, reynolds=1600., mach=.3,
                  gamma=1.4, prandtl=.71, initialization='constant-density', device='cpu', anti_alias='none',
-                 quadrature_order=None, viscous_scheme='ldg', penalty=4.):
+                 quadrature_order=None, viscous_scheme='ldg', penalty=4., interface_flux='rusanov'):
         if not math.isfinite(reynolds) or reynolds <= 0:
             raise ValueError('positive finite Reynolds number required')
         if not math.isfinite(mach) or not 0 < mach < 1:
@@ -29,7 +29,7 @@ class TaylorGreenVortex(CartesianNavierStokes):
                          boundary='periodic', forcing=0., anti_alias=anti_alias,
                          quadrature_order=quadrature_order,
                          reference_state=[1., 0., 0., 0., self.p0/(gamma-1)],
-                         viscous_scheme=viscous_scheme, penalty=penalty)
+                         viscous_scheme=viscous_scheme, penalty=penalty, interface_flux=interface_flux)
 
     def initial_at(self, coords):
         x, y, z = torch.broadcast_tensors(*coords)
@@ -130,7 +130,7 @@ def run(output, *, cells=(64, 64, 64), p=3, reynolds=1600., mach=.3,
         anti_alias='none', quadrature_order=None, final_time=10., cfl=.8,
         max_dt=None, max_steps=None, diagnostic_interval=100, checkpoint_interval=10000,
         snapshot_times=(10.,), sample_points=None, fields=True, plot=True, resume=False, compare_with=(),
-        viscous_scheme='ldg', penalty=4.):
+        viscous_scheme='ldg', penalty=4., interface_flux='rusanov', model_class=TaylorGreenVortex, model_options=None):
     output = Path(output)
     if not math.isfinite(final_time) or final_time < 0:
         raise ValueError('finite nonnegative final_time required')
@@ -144,10 +144,15 @@ def run(output, *, cells=(64, 64, 64), p=3, reynolds=1600., mach=.3,
                   prandtl=prandtl, initialization=initialization, backend=backend, anti_alias=anti_alias,
                   quadrature_order=quadrature_order, cfl=cfl, max_dt=max_dt,
                   viscous_scheme=viscous_scheme, penalty=penalty)
-    model = TaylorGreenVortex(tuple(cells), p, reynolds=reynolds, mach=mach,
+    # Keep legacy Rusanov restart configurations byte-for-byte compatible.
+    if interface_flux != 'rusanov':
+        config['interface_flux'] = interface_flux
+    if model_options:
+        config['model_options'] = dict(model_options)
+    model = model_class(tuple(cells), p, reynolds=reynolds, mach=mach,
                              gamma=gamma, prandtl=prandtl, initialization=initialization, device=device,
                              anti_alias=anti_alias, quadrature_order=quadrature_order,
-                             viscous_scheme=viscous_scheme, penalty=penalty)
+                             viscous_scheme=viscous_scheme, penalty=penalty, interface_flux=interface_flux, **(model_options or {}))
     stepper = model.make_stepper(backend, constant_mass_flux=False)
     checkpoint = output/'checkpoint.pt'
     if resume:
@@ -274,6 +279,7 @@ def main():
     parser.add_argument('--reynolds', type=float, default=1600.)
     parser.add_argument('--initialization', choices=('constant-density', 'constant-temperature'), default='constant-density')
     parser.add_argument('--backend', choices=('native-p3', 'torch'), default='native-p3')
+    parser.add_argument('--interface-flux', choices=('rusanov', 'roe'), default='rusanov')
     parser.add_argument('--viscous-scheme', choices=('ldg', 'br1-penalty'), default='ldg')
     parser.add_argument('--penalty', type=float, default=4.)
     parser.add_argument('--device', default='cpu')
@@ -301,7 +307,7 @@ def main():
         from fr.native.cartesian_ns.runtime import configure_cpu_memory_reuse
         configure_cpu_memory_reuse()
     run(args.output, cells=tuple(args.cells or (args.n,)*3), p=args.p, reynolds=args.reynolds,
-        mach=args.mach, initialization=args.initialization, backend=args.backend, device=args.device, anti_alias=args.anti_alias,
+        mach=args.mach, initialization=args.initialization, backend=args.backend, interface_flux=args.interface_flux, device=args.device, anti_alias=args.anti_alias,
         quadrature_order=args.quadrature_order, viscous_scheme=args.viscous_scheme, penalty=args.penalty,
         final_time=args.time, cfl=args.cfl,
         max_dt=args.max_dt, max_steps=args.steps, diagnostic_interval=args.diagnostic_interval,

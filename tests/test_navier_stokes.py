@@ -106,7 +106,7 @@ class NavierStokesTests(unittest.TestCase):
         for parameters in ({'mu': 0.}, {'mu': float('nan')}, {'prandtl': 0.}, {'gamma': float('nan')}):
             with self.assertRaises(ValueError):
                 NavierStokes(**parameters)
-        for parameters in ({'p': 2}, {'anti_alias': 'flux'}, {'anti_alias': 'surf-flux'}):
+        for parameters in ({'p': 2},):
             model, state = self.periodic_model((2, 2, 2), **parameters)
             with self.assertRaises(ValueError):
                 model.make_stepper('native-p3')

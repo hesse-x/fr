@@ -125,8 +125,19 @@ class NativeFluxStepper:
         valid = bool(result[2])
         if not valid:
             return False, float('nan')
-        dt = min(cfl/((2*self.model.s.p+1)*result[1]), cfl*result[0]/self.diffusion_factor)
+        dt = min(cfl/((2*self.model.s.p+1)*result[1]), cfl*result[0]/(self.diffusion_factor*self._diffusion_ratio(state)))
         return True, dt
+
+    def _diffusion_ratio(self, state):
+        if getattr(self.model, 'sgs', None) is None:
+            return 1.
+        plan = getattr(self, 'plan', None)
+        if plan is not None:
+            return plan.viscous.diffusion_ratio(state)
+        if not hasattr(self, '_sgs_viscous'):
+            from .grouped_ldg import GroupedViscous
+            self._sgs_viscous = GroupedViscous(self.model)
+        return self._sgs_viscous.diffusion_ratio(state)
 
     def advance(self, state, t, dt):
         self._check_time(t, dt)
@@ -204,4 +215,7 @@ class NativeLocalRKStepper(NativeFluxStepper):
                 self.library.flux_rk_finalize(original.data_ptr(), stage.data_ptr(), self.pending.data_ptr(),
                     output.data_ptr(), self.count, self.last_force, coefficient, int(combined))
             stage = output
+        if valid and getattr(self.model, 'sgs', None) is not None:
+            next_dt = min(cfl/((2*self.model.s.p+1)*result[1]),
+                          cfl*result[0]/(self.diffusion_factor*self._diffusion_ratio(stage)))
         return stage, valid, next_dt

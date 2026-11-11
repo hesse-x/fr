@@ -191,7 +191,8 @@ venv/bin/python -m case.taylor_green_vortex --n 4 --time .05 --threads 2 \
 
 `--time`为绝对终止时间，`--steps`为可选绝对步数上限；`--resume`要求有可用检查点且数值配置一致。
 `--max-dt`用于限制时间步；`--cells NX NY NZ`可替代等向`--n`。
-`--backend torch --anti-alias 'flux, surf-flux'`用于独立Torch路径的去混叠实验，native会明确拒绝不支持的配置。
+`--anti-alias 'flux, surf-flux' --quadrature-order 6` 可启用体通量及界面通量过积分，
+Torch 和 native-p3 均支持；已归档 DNS 仍为无去混叠配置。
 如需场输出，可设 `--snapshot-times 10`；VTK含ρ、p、速度、涡量和Q，能谱由等距子单元中心采样后计算。
 
 ## 目录与保留文件
@@ -216,3 +217,13 @@ venv/bin/python -m unittest discover -s tests -p test_taylor_green_vortex.py
 
 验证覆盖初值/周期性、涡量空间收敛、黏性动能离散收支、native/Torch多步一致性、
 无驱动守恒、恢复逐位一致、采样频率不改变状态、均匀采样与FFT Parseval，以及参考比较定义。
+
+## 界面通量选项
+
+`--interface-flux rusanov|roe` 选择界面数值通量，默认仍为 Rusanov。
+两种选项均支持 Torch 和 CPU p=3 native；Gauss 解点、Radau 修正、单元内体通量、
+LDG/BR1 黏性及 RK 方法不随该选项变化。Roe 使用 Roe 平均的特征分解，仅声学波
+采用 Harten 二次熵修正，修正宽度为 Roe 声速的 0.05 倍，接触/剪切波保持 |u_n|。
+它是普通 Roe 加声学熵修正，不是低 Mach 预处理或 L²Roe。
+Roe 被记录在数值配置中，不能用另一种界面通量直接续算；旧 Rusanov 检查点兼容。
+上述已有完整 DNS 结果仍对应 Rusanov，没有因增加选项而重算。

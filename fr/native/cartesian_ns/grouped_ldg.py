@@ -12,9 +12,9 @@ from .native_build import header_bytes, compiler_flags
 _LIBRARIES = {}
 
 
-def load_library(boundary_mode='separate', viscous_config=None):
+def load_library(boundary_mode='separate', viscous_config=None, sgs=None):
     source = Path(__file__).with_name('kernels')/'grouped_ldg.cpp'
-    flags = compiler_flags(boundary_mode, viscous_config)
+    flags = compiler_flags(boundary_mode, viscous_config, sgs)
     key = hashlib.sha256(source.read_bytes()+header_bytes()+torch.__version__.encode()+' '.join(flags).encode()).hexdigest()[:16]
     if key in _LIBRARIES:
         return _LIBRARIES[key]
@@ -31,8 +31,11 @@ def load_library(boundary_mode='separate', viscous_config=None):
     library = ctypes.CDLL(str(target))
     p = ctypes.c_void_p
     library.grouped_ldg.argtypes = [p, p, p, ctypes.c_int64]+[p]*11+[
-        ctypes.c_double]*5+[ctypes.c_int]*4+[p]
+        ctypes.c_double]*8+[ctypes.c_int]*4+[p]
     library.grouped_ldg.restype = None
+    if sgs is not None:
+        library.grouped_sgs_ratio.argtypes = [p, ctypes.c_int64]+[p]*11+[ctypes.c_double]*8+[ctypes.c_int]*4
+        library.grouped_sgs_ratio.restype = ctypes.c_double
     library.build_directory = str(build)
     _LIBRARIES[key] = library
     return library
@@ -51,8 +54,12 @@ class GroupedViscous:
         self.cells = tuple(model.s.cells)
         nx, ny, nz = self.cells
         self.count = nx*ny*nz
-        self.constants = (model.eq.gamma, model.mu, model.kappa, model.temperature, model.forcing)
-        self.library = load_library(boundary_mode, model.viscous_config)
+        sgs = getattr(model, 'sgs', None)
+        self.constants = (model.eq.gamma, model.mu, model.kappa, model.temperature, model.forcing,
+                          getattr(sgs, 'cv', getattr(sgs, 'cs', 0.)),
+                          sgs.turbulent_prandtl if sgs is not None else .9,
+                          getattr(model, 'sgs_filter_scale', 1.))
+        self.library = load_library(boundary_mode, model.viscous_config, getattr(model, 'sgs', None))
 
         def coord(old):
             return [old//(ny*nz), old//nz % ny, old % nz]
@@ -113,11 +120,14 @@ class GroupedViscous:
                         model.s.gl.contiguous(), model.s.gr.contiguous()]
         self.metadata = dict(block=list(block), groups=self.groups,
             dependency_pruned_halo=not centered, viscous_scheme=model.viscous_scheme,
+            sgs_model=type(sgs).__name__.lower() if sgs is not None else 'none',
+            sgs_filter_width=getattr(model, 'filter_width', 'dof'),
+            sgs_filter_scale=getattr(model, 'sgs_filter_scale', 1.),
             max_owned=self.max_owned, max_active=self.max_active, max_primitive=self.max_primitive,
             total_owned=len(owned_meta), total_active=len(active_meta), total_primitive=len(primitive_ids),
             gradient_halo_ratio=len(active_meta)/self.count,
             primitive_halo_ratio=len(primitive_ids)/self.count,
-            scratch_bytes_per_worker=8*64*(4*self.max_primitive+16*self.max_active+5*self.max_owned),
+            scratch_bytes_per_worker=8*64*(4*self.max_primitive+(16+int(sgs is not None))*self.max_active+5*self.max_owned),
             build_directory=self.library.build_directory)
 
     def __call__(self, state, convection):
@@ -136,6 +146,15 @@ class GroupedViscous:
         if profile:
             return output, dict(zip(('pack_primitive', 'gradient', 'stress_and_heat', 'dual_lifting', 'wall_and_scatter'), timing))
         return output
+
+    def diffusion_ratio(self, state):
+        """Maximum SGS/molecular diffusion bound using group-local LDG gradients."""
+        if (state.device.type != 'cpu' or state.dtype != torch.float64 or
+                tuple(state.shape) != self.shape or not state.movedim(-1, 0).is_contiguous()):
+            raise ValueError('expected matching Cartesian CPU float64 SoA state')
+        return self.library.grouped_sgs_ratio(state.data_ptr(), self.count,
+            *(buffer.data_ptr() for buffer in self.buffers), *self.constants,
+            self.groups, self.max_owned, self.max_active, self.max_primitive)
 
     def make_rhs(self, convection):
         return lambda state, t=0.: self.evaluate(state, convection(state))

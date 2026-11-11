@@ -6,7 +6,8 @@ extern "C" void grouped_convection(
     const int64_t* group_offsets, const int64_t* cells,
     const int64_t* face_offsets, const int64_t* faces, const int64_t* cell_faces,
     const double* widths, const double* L, const double* R, const double* matrix,
-    const double* gl, const double* gr, const double* reference, double gamma,
+    const double* gl, const double* gr, const double* reference,
+    const double* interpolation,const double* projection,double gamma,
     int groups, int max_cells, int max_faces, double* timing) {
     using namespace fr_convection;
     if(timing) std::fill_n(timing,4,0.);
@@ -18,7 +19,7 @@ extern "C" void grouped_convection(
         for(int64_t g=begin;g<end;++g) {
             auto value=fr_convection::group(input,elements,g,group_offsets,cells,
                 face_offsets,faces,cell_faces,widths,L,R,matrix,gl,gr,reference,gamma,
-                scratch.data(),timing ? local:nullptr);
+                scratch.data(),timing ? local:nullptr,interpolation,projection);
             double started=timing ? fr_parallel::wall_time():0.;
             fr_convection::scatter(value.result,output,elements,g,group_offsets,cells);
             if(timing) local[3]+=fr_parallel::wall_time()-started;

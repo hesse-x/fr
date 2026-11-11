@@ -21,7 +21,12 @@ class SharedEquationTests(unittest.TestCase):
         with self.assertRaises(ValueError): make_equation('unknown')
         callback=lambda m,p,a:m.flux
         self.assertIs(make_numerical_flux(callback,Euler(2)),callback)
-        with self.assertRaises(ValueError): make_numerical_flux('roe',Euler(2))
+        roe = make_numerical_flux('roe', Euler(2))
+        from fr.core import Face
+        equation = Euler(2)
+        state = torch.tensor([1., .2, -.1, 3.], dtype=torch.float64)
+        flux = equation.flux(state, 0)
+        torch.testing.assert_close(roe(Face(state, flux), Face(state, flux), 0), flux)
 
     def test_linearized_euler_is_nonlinear_flux_derivative(self):
         # Constant primitive-to-conservative Jacobian maps the two systems.
