@@ -1,8 +1,9 @@
-"""BR1 NS geometry, constitutive laws and wall-load postprocessing for native runs."""
+"""Airfoil boundary data and loads over the framework NS viscous operators."""
 import importlib.util
 from pathlib import Path
 import math
 import torch
+from fr import NavierStokes, make_viscous_operator
 
 spec = importlib.util.spec_from_file_location('naca_euler_physics', Path(__file__).parents[1]/'naca0012-euler/airfoil.py')
 module = importlib.util.module_from_spec(spec)
@@ -11,82 +12,54 @@ spec.loader.exec_module(module)
 
 class Airfoil(module.Airfoil):
     def __init__(self, mesh, p=2, mach=.1, alpha=0., quadrature_order=6,
-                 reynolds=1000., prandtl=.72, penalty=4., viscous_step_factor=1.):
-        if not all(math.isfinite(v) and v > 0 for v in (reynolds, prandtl, penalty, mach, viscous_step_factor)):
-            raise ValueError('positive finite Re, Pr, penalty and Mach required')
+                 reynolds=1000., prandtl=.72, penalty=4., viscous_step_factor=1.,
+                 viscous_scheme='br1-penalty'):
+        if not all(math.isfinite(v) and v > 0 for v in (reynolds, prandtl, mach, viscous_step_factor)):
+            raise ValueError('positive finite Re, Pr, Mach and viscous step factor required')
         super().__init__(mesh, p, mach, alpha, quadrature_order)
-        self.reynolds, self.prandtl, self.penalty = reynolds, prandtl, penalty
+        self.reynolds, self.prandtl = reynolds, prandtl
         # rho_inf=c_inf=chord=1; Re=rho_inf*u_inf*chord/mu.
         self.mu = mach/reynolds
+        self.eq = NavierStokes(2, mu=self.mu, prandtl=prandtl)
         self.viscous_step_factor = viscous_step_factor
+        self.viscous_operator = make_viscous_operator(self.s, self.eq,
+            scheme=viscous_scheme, penalty=penalty, boundary=self.viscous_boundary,
+            normal_flux=self.viscous_boundary_flux)
+        self.viscous_config = self.viscous_operator.config
+        self.viscous_scheme, self.penalty = self.viscous_config.scheme, self.viscous_config.penalty
+        self.h = self.viscous_operator.blocks[0]['h']
+        self.face_h = self.viscous_operator.face_h
+        # Native consumes the same framework geometry as the Torch operator.
+        geometry = self.viscous_operator.blocks[0]
+        self.Gx, self.Gy, self.lift_matrix = geometry['Gx'], geometry['Gy'], geometry['lift']
         b = self.s.blocks[0]
-        perimeter = (self.s.face_jacobian[b['ids']]*self.s.fw).sum((1,2))
-        self.h = 2*b['areas']/perimeter
-        hf = torch.empty(self.mesh.nfaces, dtype=torch.float64)
-        hf[b['ids']] = self.h[:,None].expand_as(b['ids'])
-        self.face_h = torch.minimum(hf, hf[self.s.neighbor])
+        self.lift = self.lift_matrix.reshape(b['ne'], b['ns'], b['ids'].shape[1], -1).permute(0, 2, 1, 3)
 
     def primitive_vector(self, U):
-        rho, vel, pressure = self.eq.primitive(U)
-        # theta=p/rho=R*T, so conductivity for grad(theta) is mu*gamma/((gamma-1)*Pr).
-        return torch.cat((vel, (pressure/rho)[...,None]), -1)
+        return self.eq.primitive_variables(U)
 
-    def surface(self, F):
-        s = self.s; b = s.blocks[0]
-        return torch.einsum('fqi,efqv,q,efq->eiv', b['face_B'], F[b['ids']], s.fw, s.face_jacobian[b['ids']])
+    def viscous_boundary(self, coords, inside, normal, tag, t):
+        if tag == 2:
+            value = inside.clone()
+            value[..., :2] = 0.  # no slip; interior theta for adiabatic wall
+            return value
+        return self.primitive_vector(self.far).expand_as(inside)
 
-    def _interpolate_primitives(self, W):
-        """Compute volume and both face traces once per viscous residual."""
-        s = self.s; b = s.blocks[0]
-        V = W.reshape(b['ne'], b['ns'], -1)
-        Q = b['B']@V
-        L = s._states(W); R = s.neighbor_states(L)
-        return Q, L, R
+    @staticmethod
+    def viscous_boundary_flux(coords, inside, normal, tag, t, flux):
+        if tag == 2:
+            flux = flux.clone()
+            flux[..., -1] = 0.  # stationary adiabatic wall
+        return flux
 
     def gradient(self, W):
-        return self._gradient_from_traces(*self._interpolate_primitives(W))
-
-    def _gradient_from_traces(self, Q, L, R):
-        s = self.s; b = s.blocks[0]
-        trace = .5*(L+R)
-        trace[self.wall_ids,:,:2] = 0.  # no slip; theta trace is interior (adiabatic)
-        trace[self.outer_ids] = self.primitive_vector(self.far).expand_as(trace[self.outer_ids])
-        grad = []
-        for axis, G in enumerate((self.Gx, self.Gy)):
-            F = trace*s.normals[...,axis,None]
-            grad.append(-G@Q-self.lift_matrix@F[b['ids']].reshape(b['ne'],-1,3))
-        return torch.stack(grad,-1).reshape(s.ndof,3,2)
+        return self.viscous_operator.gradient(W)
 
     def viscous_flux(self, W, grad):
-        g = grad[...,:2,:]
-        div = g[...,0,0]+g[...,1,1]
-        stress = self.mu*(g+g.transpose(-1,-2)-2/3*div[...,None,None]*torch.eye(2,dtype=W.dtype))
-        heat = self.mu*3.5/self.prandtl*grad[...,2,:]
-        energy = torch.einsum('...i,...ij->...j',W[...,:2],stress)+heat
-        return torch.cat((torch.zeros_like(energy[...,None,:]),stress,energy[...,None,:]),-2)
+        return self.viscous_operator.flux(W, grad)
 
     def viscous(self, U):
-        s = self.s; b = s.blocks[0]
-        W = self.primitive_vector(U)
-        Q, L, R = self._interpolate_primitives(W)
-        grad = self._gradient_from_traces(Q, L, R)
-        G = grad.reshape(b['ne'],b['ns'],6)
-        volume_flux = self.viscous_flux(Q,(b['B']@G).reshape(b['ne'],-1,3,2))
-        gl = s._states(grad.reshape(s.ndof,6)).reshape(*L.shape,2)
-        gr = s.neighbor_states(gl.flatten(-2)).reshape_as(gl)
-        flux = .5*(self.viscous_flux(L,gl)+self.viscous_flux(R,gr))
-        common = torch.einsum('fqva,fqa->fqv',flux,s.normals)
-        jump = R-L
-        jump[self.outer_ids] = self.primitive_vector(self.far)-L[self.outer_ids]
-        jump[self.wall_ids,:,:2] = -L[self.wall_ids,:,:2]
-        jump[self.wall_ids,:,2] = 0.
-        scale = self.penalty*(s.p+1)**2/self.face_h[:,None]
-        common[...,1:3] += self.mu*scale[...,None]*jump[...,:2]
-        common[...,3] += self.mu*3.5/self.prandtl*scale*jump[...,2]
-        # Stationary adiabatic wall: zero total viscous energy flux.
-        common[self.wall_ids,:,3] = 0.
-        value = -self.Gx@volume_flux[...,0]-self.Gy@volume_flux[...,1]-self.lift_matrix@common[b['ids']].reshape(b['ne'],-1,4)
-        return value.reshape_as(U), common
+        return self.viscous_operator.evaluate(U)
 
     def loads(self, U):
         cl, cd, pressure = super().loads(U)

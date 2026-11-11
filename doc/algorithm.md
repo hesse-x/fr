@@ -27,7 +27,7 @@
 |---|---|---|---|
 | 标量输运 | 标量平流 | Cartesian FR / 二维曲边FR-DG | 周期连接、解析给定外部状态 |
 | 可压缩无黏流 | 非线性Euler守恒量 | Cartesian FR / 二维曲边FR-DG | 周期、解析状态、滑移壁、特征远场 |
-| 可压缩黏性流 | 理想气体NS，常黏度 | 三维Cartesian LDG；二维曲边BR1加惩罚 | 周期、恒温无滑移壁、绝热无滑移壁、远场 |
+| 可压缩黏性流 | 理想气体NS，常黏度 | Cartesian / 二维曲边均可选LDG或BR1加惩罚 | 周期、恒温无滑移壁、绝热无滑移壁、远场 |
 | 声学与线化流动 | 压力/速度扰动；线化Euler另含密度扰动 | Cartesian FR，特征通量，方向分裂PML | 刚壁、PML外端条件；背景流需区分坐标处理 |
 | 电磁波 | Maxwell六分量；二维TMz三分量 | Cartesian FR / 二维曲边FR-DG | PEC、材料阻抗界面、PML、入射特征为零的辐射外边界 |
 | 量子波动 | 薛定谔实虚部或复振幅 | Cartesian FR-LDG Hamiltonian | 外边界零Dirichlet、体势垒/势阱 |
@@ -45,11 +45,11 @@
 
 对一维映射单元，守恒方程的半离散形式为：
 
-\[
+$$
  \frac{dU}{dt}=-\frac{2}{h}\left[
  DF+g'_L(\widehat F_L-F_L^D)+g'_R(\widehat F_R-F_R^D)
  \right]+S.
-\]
+$$
 
 多维按方向分别处理后相加。这里：
 
@@ -70,9 +70,9 @@
 
 算法使用几何映射、物理质量矩阵、体积分矩阵和面提升：
 
-\[
+$$
  M\dot U=G_xF_x+G_yF_y-\mathcal L(\widehat F_n)+M S.
-\]
+$$
 
 通量在额外体积分点求值，面上使用法向通量；每类单元独立成块，预计算几何矩阵，
 通过Cholesky求解施加质量矩阵逆。相邻面的积分点方向在连接时对齐。
@@ -110,10 +110,10 @@
 
 Cartesian双曲步长按方向波速与单元宽度估计：
 
-\[
+$$
  \Delta t\le\frac{\mathrm{CFL}}
  {(2p+1)\max_{\mathbf x}\sum_a \lambda_a/h_a}.
-\]
+$$
 
 显式扩散/薛定谔还需考虑约为`(p+1)^4/h²`的谱尺度；PML还受阻尼率限制。
 具体系数由对应模型或算例配置，不能将一个CFL值跨离散路径直接等同。
@@ -137,13 +137,14 @@ Cartesian平流采用常速度迎风通量和周期面连接；二维曲边平�
 
 [fr/equations/euler.py](../fr/equations/euler.py) 使用：
 
-\[
+$$
  U=(\rho,\rho\mathbf u,E),\qquad
  p=(\gamma-1)\left(E-\tfrac12\rho|\mathbf u|^2\right),
-\]
-\[
+$$
+
+$$
  F_a=(\rho u_a,\rho\mathbf u u_a+p\mathbf e_a,(E+p)u_a).
-\]
+$$
 
 Rusanov波速为`|u_a|+c`或`|u·n|+c`。
 有效性检查要求状态有限、ρ>0、p>0；检查会报错，不会自动修复非物理状态。
@@ -162,30 +163,60 @@ Rusanov波速为`|u_a|+c`或`|u·n|+c`。
 实现见 [翼型Euler组装](../case/naca0012-euler/airfoil.py) 和
 [原生公共边界](../fr/native/boundaries.hpp)。
 
-## 4. Navier–Stokes：本构公共，空间路径有两套
+## 4. Navier–Stokes：公共本构与可配置黏性离散
 
 ### 4.1 常物性本构
 
 [fr/equations/navier_stokes.py](../fr/equations/navier_stokes.py) 在Euler基础上提供常黏度应力和导热：
 
-\[
+$$
  \tau=\mu\left(\nabla\mathbf u+\nabla\mathbf u^T-
  \tfrac23(\nabla\cdot\mathbf u)I\right),
  \qquad \kappa=\frac{\mu\gamma}{(\gamma-1)Pr}\quad(R=1),
-\]
-\[
+$$
+
+$$
  F^v_a=\left(0,\tau_{:a},\mathbf u\cdot\tau_{:a}+\kappa\partial_a T\right),
  \qquad \dot U=-\nabla\cdot F^c+\nabla\cdot F^v+S.
-\]
+$$
 
 三维Cartesian公共组装使用R=1、T=p/ρ。
 二维曲边实现以θ=p/ρ=RT为传热变量，并配套相应导热系数。
 两条路径都采用Stokes假设的`2/3`系数。
 
-### 4.2 三维Cartesian：互补迹LDG
+### 4.2 公共黏性接口与Cartesian实现
+
+[fr/viscous.py](../fr/viscous.py) 的`make_viscous_operator`独立选择黏性离散方法，
+并按网格选择对应实现。算法不是由维数或曲边属性强制决定的。
+
+| 网格 / 后端 | `ldg` | `br1-penalty` |
+|---|---|---|
+| 1–3维Cartesian，Torch公共黏性算子 | 支持 | 支持 |
+| 三维Cartesian NS，CPU FP64 p=3 native | 支持，原有默认 | 支持，保持组内融合 |
+| 二维曲边三角形/四边形/混合网格，Torch | 支持 | 支持 |
+| 二维曲边同类单元块，CPU FP64 native | 支持 | 支持，翼型/圆柱原有默认 |
+
+两种实现提供相同的`gradient(W,t)`、`flux(W,gradient)`、`evaluate(U,t)`和`rhs(U,t)`接口。
+W为速度和温度；`evaluate`返回黏性RHS及数值面通量，Cartesian的第二项为`None`。
+网格几何、气体本构、物理边界回调与算法选择分别配置：
+
+```python
+from fr import make_viscous_operator
+
+viscous = make_viscous_operator(
+    grid, ns_equation, scheme='br1-penalty', penalty=4.,
+    boundary=primitive_boundary,
+)
+viscous_rhs = viscous.rhs(U, t)
+```
+
+Cartesian边界回调签名为`(coords,inside,axis,side,t)`，曲边为`(coords,inside,normal,tag,t)`，
+均返回实际原始变量边界值。曲边可另传`normal_flux(coords,inside,normal,tag,t,flux)`，
+返回施加物理条件后的外法向黏性通量；例如静止绝热壁将能量通量置零。
+Cartesian NS的恒温壁机械功修正由其公共组装执行。
 
 [fr/navier_stokes.py](../fr/navier_stokes.py) 的`CartesianNavierStokes`组装FR/Rusanov对流和
-[CartesianLDG](../fr/second_order.py)：
+所选黏性算子。默认[CartesianLDG](../fr/second_order.py)步骤如下：
 
 1. 从守恒量得到`(u,v,w,T)`。
 2. 梯度阶段内部面取坐标较小侧迹，即`w_hat=w_minus`。
@@ -194,7 +225,9 @@ Rusanov波速为`|u_a|+c`或`|u·n|+c`。
 
 周期或齐次Dirichlet情况下，这对算子在Gauss质量内积中满足离散伴随关系`D=−G*`，
 使标量扩散具有非正的能量贡献。耦合应力/导热复用同一梯度与散度接口。
-目前LDG非周期接口提供Dirichlet值，尚无通用Neumann/Robin配置。
+`br1-penalty`改用平均梯度迹和平均黏性通量，并加入速度/温度跳跃惩罚，
+系数分别为`μ C(p+1)²/h_face`和`κ C(p+1)²/h_face`，h_face取相邻单元较小宽度。
+公共Cartesian二阶接口尚无通用Neumann/Robin配置。
 
 公共NS边界预配置：
 
@@ -217,8 +250,15 @@ Rusanov波速为`|u_a|+c`或`|u·n|+c`。
 [fr/native/cartesian_ns/](../fr/native/cartesian_ns/) 支持三维Cartesian、CPU FP64、p=3、SoA状态，
 以及上述周期/恒温槽道两种边界。
 `make_stepper('native-p3')`使用4×4×4单元分组、线程私有halo/scratch、AVX2/FMA，
-组内融合对流、LDG和局部RK更新，并将有效性/CFL检查合入末阶段。
+组内融合对流、所选黏性算子和局部RK更新，并将有效性/CFL检查合入末阶段。
 可选恒流量约束和12场矩梯形累计使用独立显式接口。
+
+`viscous_scheme='ldg'`或`'br1-penalty'`在模型构造时选择。
+native通过[viscous_kernel.hpp](../fr/native/cartesian_ns/kernels/viscous_kernel.hpp)编译期选择
+[LDG](../fr/native/cartesian_ns/kernels/ldg_kernel.hpp)或
+[BR1加惩罚](../fr/native/cartesian_ns/kernels/br1_kernel.hpp)，
+不把黏性计算拆成额外的全域kernel。LDG保留原有单侧依赖裁剪；BR1需要两侧halo，
+因此不能假设两者开销相同。BR1惩罚系数进入构建缓存键。
 
 边界规则位于 [kernels/boundaries.hpp](../fr/native/cartesian_ns/kernels/boundaries.hpp)。
 默认`boundary_mode='separate'`在组内分别遍历内部与边界面/单元，继续复用scratch；
@@ -229,15 +269,20 @@ Rusanov波速为`|u_a|+c`或`|u·n|+c`。
 相应数据流与性能记录见 [channel-dns/algorithm.md](../case/channel-dns/algorithm.md) 和
 [channel-dns/perf.md](../case/channel-dns/perf.md)。
 
-### 4.4 二维曲边：BR1加界面惩罚
+### 4.4 二维曲边：平均迹或互补迹
 
-翼型与圆柱黏性流使用独立的曲边BR1路径，几何/参考实现主要位于
-[naca0012-ns/airfoil.py](../case/naca0012-ns/airfoil.py)，
+曲边黏性几何、梯度提升、通量和惩罚位于[fr/viscous.py](../fr/viscous.py)，
 原生算子位于 [fr/native/compressible.cpp](../fr/native/compressible.cpp)。
+[翼型适配器](../case/naca0012-ns/airfoil.py)只提供归一化参数、边界值和载荷后处理。
 
-算法先插值速度和θ，在内部面取两侧平均迹构造提升梯度；
+默认`br1-penalty`先插值速度和θ，在内部面取两侧平均迹构造提升梯度；
 再计算体黏性通量，面上取两侧黏性通量平均并加入速度/温度跳跃惩罚。
 惩罚尺度与`μ(p+1)²/h_face`相关，面尺寸取相邻单元的约束尺度。
+这是BR1加显式跳跃惩罚，不称为标准BR2。
+
+选择`ldg`时，一对内部面以较小面编号侧提供原始变量迹，较大面编号侧提供黏性通量，
+不另加内部跳跃惩罚。共享面的积分点反向由邻接映射处理；几何变换、质量矩阵和面法向
+仍由曲边网格负责。曲边无需保角或正交，LDG也不局限于Cartesian网格。
 
 - **静止绝热无滑移壁**：速度迹为零、θ取内侧迹，温度惩罚跳跃为零；
   面上的总黏性能量通量显式置零。
@@ -250,17 +295,24 @@ Rusanov波速为`|u_a|+c`或`|u·n|+c`。
 圆柱流复用翼型NS驱动并改为直径归一化。这一后端目前要求其适配器支持的同类二维单元块，
 不能据此认为所有`MeshFR2D`混合网格都已有原生NS支持。
 
+槽道/Taylor–Green保持默认LDG，翼型/圆柱保持默认BR1加惩罚。
+四个NS入口提供`--viscous-scheme {ldg,br1-penalty}`和`--penalty`；
+续算检查该配置，旧检查点缺少字段时按原算法和惩罚系数4解释。
+步长估计考虑BR1惩罚系数；它是保守估计，并非所有网格上的严格稳定界。
+新增路径已有解析梯度/黏性RHS、耗散、守恒、绝热壁和native/Torch多阶段一致性测试，
+尚未用新选项重算已有完整DNS或气动力基准，原有结果仍对应原默认方法。
+
 ## 5. 声学、线化Euler与PML
 
 ### 5.1 两种线性方程
 
 [fr/equations/acoustics.py](../fr/equations/acoustics.py) 使用`(p',u')`：
 
-\[
+$$
  (\partial_t+\mathbf U_0\cdot\nabla)p'+\rho_0c_0^2\nabla\cdot\mathbf u'=0,
 \qquad
  (\partial_t+\mathbf U_0\cdot\nabla)\mathbf u'+\nabla p'/\rho_0=0.
-\]
+$$
 
 `Acoustics`取U₀=0，`ConvectedAcoustics`加入均匀背景平流。
 [LinearizedEuler](../fr/equations/linearized_euler.py) 使用`(rho',u',p')`，额外推进密度连续性方程，
@@ -307,10 +359,10 @@ PML是有体积厚度的吸收区域，层最外端仍需边界条件。
 
 [fr/equations/maxwell.py](../fr/equations/maxwell.py) 的六分量状态为`(Ex,Ey,Ez,Hx,Hy,Hz)`：
 
-\[
+$$
  \epsilon\partial_t\mathbf E=\nabla\times\mathbf H,\qquad
  \mu\partial_t\mathbf H=-\nabla\times\mathbf E.
-\]
+$$
 
 均匀材料波速为`c=1/sqrt(epsilon*mu)`。
 特征通量只对切向场跳跃加耗散，法向零速模态不附加标量Rusanov式惩罚。
@@ -328,10 +380,10 @@ PML是有体积厚度的吸收区域，层最外端仍需边界条件。
 均匀六分量Maxwell类本身没有通用变材料界面组装。
 [介电圆柱散射](../case/mie_cylinder/solve.py) 专门采用二维容量形式：
 
-\[
+$$
  C\,\partial_t U+\nabla\cdot F_{\mathrm{curl}}=S,
  \qquad C=\operatorname{diag}(\epsilon,\mu,\mu).
-\]
+$$
 
 材料区域由网格region标签给定；界面根据两侧阻抗`Z=sqrt(mu/epsilon)`求公共电场和切向磁场，
 再生成公共法向curl通量。曲边网格负责圆柱贴体几何。
@@ -365,9 +417,9 @@ PML源也按容量配套，空间RHS最终除以C。
 
 [fr/equations/schrodinger.py](../fr/equations/schrodinger.py) 使用hbar=m=1的方程：
 
-\[
+$$
  i\partial_t\psi=-\tfrac12\Delta\psi+V\psi.
-\]
+$$
 
 以`U=(Re psi, Im psi)`存储，先用LDG构造`H(U)=−0.5 D G U+VU`，
 再返回`(H_Im,−H_Re)`。

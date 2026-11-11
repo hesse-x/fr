@@ -14,7 +14,7 @@ class TaylorGreenVortex(CartesianNavierStokes):
     """rho0=U0=L=R=1; Ma changes background pressure, never Re or velocity."""
     def __init__(self, cells=(64, 64, 64), p=3, *, reynolds=1600., mach=.3,
                  gamma=1.4, prandtl=.71, initialization='constant-density', device='cpu', anti_alias='none',
-                 quadrature_order=None):
+                 quadrature_order=None, viscous_scheme='ldg', penalty=4.):
         if not math.isfinite(reynolds) or reynolds <= 0:
             raise ValueError('positive finite Reynolds number required')
         if not math.isfinite(mach) or not 0 < mach < 1:
@@ -28,7 +28,8 @@ class TaylorGreenVortex(CartesianNavierStokes):
                          gamma=gamma, prandtl=prandtl, device=device,
                          boundary='periodic', forcing=0., anti_alias=anti_alias,
                          quadrature_order=quadrature_order,
-                         reference_state=[1., 0., 0., 0., self.p0/(gamma-1)])
+                         reference_state=[1., 0., 0., 0., self.p0/(gamma-1)],
+                         viscous_scheme=viscous_scheme, penalty=penalty)
 
     def initial_at(self, coords):
         x, y, z = torch.broadcast_tensors(*coords)
@@ -45,7 +46,7 @@ class TaylorGreenVortex(CartesianNavierStokes):
     def flow_fields(self, U, *, include_q=True):
         rho, velocity, pressure = self.eq.primitive(U)
         primitive = self.primitive(U)
-        gradient = self.ldg.gradient(primitive)
+        gradient = self.viscous_operator.gradient(primitive)
         du = gradient[..., :3, :]
         omega = torch.stack((du[..., 2, 1]-du[..., 1, 2],
                              du[..., 0, 2]-du[..., 2, 0],
@@ -128,7 +129,8 @@ def run(output, *, cells=(64, 64, 64), p=3, reynolds=1600., mach=.3,
         gamma=1.4, prandtl=.71, initialization='constant-density', backend='native-p3', device='cpu',
         anti_alias='none', quadrature_order=None, final_time=10., cfl=.8,
         max_dt=None, max_steps=None, diagnostic_interval=100, checkpoint_interval=10000,
-        snapshot_times=(10.,), sample_points=None, fields=True, plot=True, resume=False, compare_with=()):
+        snapshot_times=(10.,), sample_points=None, fields=True, plot=True, resume=False, compare_with=(),
+        viscous_scheme='ldg', penalty=4.):
     output = Path(output)
     if not math.isfinite(final_time) or final_time < 0:
         raise ValueError('finite nonnegative final_time required')
@@ -140,15 +142,20 @@ def run(output, *, cells=(64, 64, 64), p=3, reynolds=1600., mach=.3,
         raise ValueError('finite nonnegative snapshot times required')
     config = dict(cells=list(cells), p=p, reynolds=reynolds, mach=mach, gamma=gamma,
                   prandtl=prandtl, initialization=initialization, backend=backend, anti_alias=anti_alias,
-                  quadrature_order=quadrature_order, cfl=cfl, max_dt=max_dt)
+                  quadrature_order=quadrature_order, cfl=cfl, max_dt=max_dt,
+                  viscous_scheme=viscous_scheme, penalty=penalty)
     model = TaylorGreenVortex(tuple(cells), p, reynolds=reynolds, mach=mach,
                              gamma=gamma, prandtl=prandtl, initialization=initialization, device=device,
-                             anti_alias=anti_alias, quadrature_order=quadrature_order)
+                             anti_alias=anti_alias, quadrature_order=quadrature_order,
+                             viscous_scheme=viscous_scheme, penalty=penalty)
     stepper = model.make_stepper(backend, constant_mass_flux=False)
     checkpoint = output/'checkpoint.pt'
     if resume:
         saved = torch.load(checkpoint, map_location=device, weights_only=False)
-        if saved['config'] != config:
+        saved_config = saved['config'].copy()
+        saved_config.setdefault('viscous_scheme', 'ldg')
+        saved_config.setdefault('penalty', 4.)
+        if saved_config != config:
             raise ValueError('checkpoint numerical configuration differs')
         U, t, step = model.soa(saved['U']), saved['time'], saved['step']
         history, snapshots = saved['history'], saved['snapshots']
@@ -267,6 +274,8 @@ def main():
     parser.add_argument('--reynolds', type=float, default=1600.)
     parser.add_argument('--initialization', choices=('constant-density', 'constant-temperature'), default='constant-density')
     parser.add_argument('--backend', choices=('native-p3', 'torch'), default='native-p3')
+    parser.add_argument('--viscous-scheme', choices=('ldg', 'br1-penalty'), default='ldg')
+    parser.add_argument('--penalty', type=float, default=4.)
     parser.add_argument('--device', default='cpu')
     parser.add_argument('--anti-alias', default='none')
     parser.add_argument('--quadrature-order', type=int)
@@ -293,7 +302,8 @@ def main():
         configure_cpu_memory_reuse()
     run(args.output, cells=tuple(args.cells or (args.n,)*3), p=args.p, reynolds=args.reynolds,
         mach=args.mach, initialization=args.initialization, backend=args.backend, device=args.device, anti_alias=args.anti_alias,
-        quadrature_order=args.quadrature_order, final_time=args.time, cfl=args.cfl,
+        quadrature_order=args.quadrature_order, viscous_scheme=args.viscous_scheme, penalty=args.penalty,
+        final_time=args.time, cfl=args.cfl,
         max_dt=args.max_dt, max_steps=args.steps, diagnostic_interval=args.diagnostic_interval,
         checkpoint_interval=args.checkpoint_interval, snapshot_times=args.snapshot_times,
         sample_points=args.sample_points, fields=not args.no_fields, plot=not args.no_plot, resume=args.resume, compare_with=args.compare_with)

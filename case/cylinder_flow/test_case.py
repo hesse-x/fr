@@ -153,6 +153,18 @@ class CylinderTests(unittest.TestCase):
         back=project(target,source,transferred)
         torch.testing.assert_close(back,U,rtol=1e-11,atol=1e-11)
 
+    def test_ldg_triangles_and_quads(self):
+        for mesh in (self.mesh, self.quad_mesh):
+            a = NativeCylinder(mesh, p=2, viscous_scheme='ldg')
+            b = CompressibleReference(module.Airfoil(mesh, p=2, reynolds=100., viscous_scheme='ldg'))
+            U = a.initial_state()
+            torch.testing.assert_close(a.rhs(U), b.rhs(U), atol=2e-10, rtol=1e-10)
+            for mode in ('global', 'local'):
+                actual = a.make_step_with_rhs(mode)(U,U.new_tensor(.1),a.rhs(U))
+                expected = b.make_step_with_rhs(mode)(U,U.new_tensor(.1),b.rhs(U))
+                for x, y in zip(actual, expected):
+                    torch.testing.assert_close(x,y,atol=3e-10,rtol=1e-10)
+
     def test_fwh_ascii_sampling(self):
         from fwh_sampling import FWHRecorder
         from fwh import read_ascii

@@ -29,9 +29,10 @@ class CartesianLDG:
         A = U.permute(perm)
         l, r = s._trace(A, s.L), s._trace(A, s.R)
         # u_hat = u_minus; q_hat = q_plus.
-        interior = l[1:] if dual else r[:-1]
+        centered = getattr(self, 'centered', False)
+        interior = .5*(l[1:]+r[:-1]) if centered else (l[1:] if dual else r[:-1])
         if s.periodic[axis]:
-            seam = l[0] if dual else r[-1]
+            seam = .5*(l[0]+r[-1]) if centered else (l[0] if dual else r[-1])
             left, right = seam, seam
         elif dual:
             left, right = l[0], r[-1]
@@ -65,3 +66,54 @@ class CartesianLDG:
         grad = self.gradient(U, t)
         flux = grad if constitutive is None else constitutive(self.grid.coords, U, grad, t)
         return self.divergence(flux, t)
+
+
+class CartesianBR1Penalty(CartesianLDG):
+    """Central lifted gradient/divergence with a separate jump penalty.
+
+    The boundary callback prescribes a value, as for CartesianLDG. Penalties
+    use the smaller adjacent cell width and positive-coordinate face jumps.
+    ``penalty_divergence`` is separate so coupled systems can map primitive
+    jumps to their physical flux components (e.g. NS momentum and heat).
+    """
+    centered = True
+
+    def __init__(self, grid, boundary=None, *, penalty=4.):
+        import math
+        if not math.isfinite(penalty) or penalty <= 0:
+            raise ValueError('positive finite BR1 penalty required')
+        super().__init__(grid, boundary)
+        self.penalty = penalty
+
+    def penalty_divergence(self, U, t=0.):
+        s = self.grid
+        result = torch.zeros_like(U)
+        for axis in range(s.dim):
+            perm = s._permutation(axis)
+            A = U.permute(perm)
+            l, r = s._trace(A, s.L), s._trace(A, s.R)
+            interior = l[1:]-r[:-1]
+            h = s.widths[axis]
+            interior_h = torch.minimum(h[:-1], h[1:])
+            if s.periodic[axis]:
+                left = right = l[0]-r[-1]
+                hl = hr = torch.minimum(h[0], h[-1])
+            else:
+                cl, cr = s.face_coords[axis]
+                left = l[0]-self.boundary(cl, l[0], axis, -1, t)
+                right = self.boundary(cr, r[-1], axis, 1, t)-r[-1]
+                hl, hr = h[0], h[-1]
+            jump = torch.cat((left[None], interior, right[None]), 0)
+            face_h = torch.cat((hl[None], interior_h, hr[None]))
+            common = self.penalty*(s.p+1)**2*jump/face_h.reshape(-1, *([1]*(jump.ndim-1)))
+            shape = [1]*A.ndim
+            shape[s.dim] = s.p+1
+            value = (s.gl.reshape(shape)*common[:-1].unsqueeze(s.dim)
+                     +s.gr.reshape(shape)*common[1:].unsqueeze(s.dim))
+            result += (2/s.cell_width(axis))*value.permute([perm.index(i) for i in range(U.ndim)])
+        return result
+
+    def diffusion(self, U, t=0., *, constitutive=None):
+        if constitutive is not None:
+            raise ValueError('coupled BR1 laws must supply their own physical jump penalty')
+        return super().diffusion(U, t)+self.penalty_divergence(U, t)

@@ -105,6 +105,29 @@ class NativeNacaTests(unittest.TestCase):
             finally:
                 torch.set_num_threads(1)
 
+    def test_ldg_viscous_native_and_adiabatic_wall(self):
+        m = self.modules['ns']
+        a = m.NativeAirfoil(self.meshes['quad'], p=2, mach=.2, alpha=7., viscous_scheme='ldg')
+        r = CompressibleReference(m.module.Airfoil(self.meshes['quad'], p=2,
+            mach=.2, alpha=7., viscous_scheme='ldg'))
+        torch.manual_seed(109)
+        U = a.far.expand(a.s.ndof, 4).clone()+.0001*torch.randn(a.s.ndof, 4, dtype=torch.float64)
+        torch.testing.assert_close(a.rhs(U), r.rhs(U), atol=2e-10, rtol=3e-11)
+        residual, faces = a.viscous(U)
+        self.assertEqual(float(faces[a.wall_ids, :, -1].abs().max()), 0.)
+        exterior = a.mesh.boundary
+        total = (faces[exterior]*a.s.face_jacobian[exterior, :, None]*a.s.fw[None, :, None]).sum((0, 1))
+        torch.testing.assert_close(a.s.integral(residual), total, atol=2e-10, rtol=1e-10)
+        for mode in ('global', 'local'):
+            native, reference = a.make_step_with_rhs(mode), r.make_step_with_rhs(mode)
+            V, W = U, U
+            fn, fr = a.rhs(V), r.rhs(W)
+            for cfl in (.05, .08):
+                V, dn, fn = native(V, U.new_tensor(cfl), fn)
+                W, dr, fr = reference(W, U.new_tensor(cfl), fr)
+                torch.testing.assert_close(V, W, atol=3e-12, rtol=3e-12)
+                torch.testing.assert_close(dn, dr, atol=1e-15, rtol=3e-13)
+
     def test_cached_scan_mutation_cfl_and_output_ownership(self):
         for name in ('euler', 'ns'):
             a, r, U = self.pair(name)
@@ -166,6 +189,8 @@ class NativeNacaTests(unittest.TestCase):
                     '--cfl', '.05', '--max-steps', '2']
             if name == 'euler':
                 args += ['--sample-every', '1', '--window', '2']
+            else:
+                args += ['--viscous-scheme', 'ldg']
             for restart in (False, True):
                 command = args if not restart else [*args, '--restart', str(out/'solution.pt'), '--max-steps', '4']
                 result = subprocess.run(command, cwd=ROOT, capture_output=True, text=True)
@@ -173,6 +198,12 @@ class NativeNacaTests(unittest.TestCase):
             data = torch.load(out/'solution.pt', weights_only=False)
             self.assertEqual(data['stats']['steps'], 4)
             self.assertIn('native', data['stats']['implementation'])
+            if name == 'ns':
+                self.assertEqual(data['stats']['viscous_scheme'], 'ldg')
+                changed = [*args, '--restart', str(out/'solution.pt'), '--viscous-scheme', 'br1-penalty']
+                result = subprocess.run(changed, cwd=ROOT, capture_output=True, text=True)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('same viscous scheme', result.stderr)
 
 
 if __name__ == '__main__':

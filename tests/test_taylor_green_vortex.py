@@ -114,6 +114,25 @@ class TaylorGreenTests(unittest.TestCase):
                 v = json.loads(f.read_text())
                 self.assertAlmostEqual(v['density_weighted_spectral_sum'], v['sampled_kinetic_energy'], places=14)
 
+    def test_viscous_scheme_restart_and_legacy_configuration(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            options = dict(cells=(2, 2, 2), final_time=.02, cfl=.1,
+                           snapshot_times=(), fields=False, plot=False)
+            out = Path(tmp)/'br1'
+            run(out, **options, viscous_scheme='br1-penalty', max_steps=1)
+            with self.assertRaisesRegex(ValueError, 'configuration differs'):
+                run(out, **options, resume=True)
+            run(out, **options, viscous_scheme='br1-penalty', resume=True)
+            config = torch.load(out/'checkpoint.pt', weights_only=False)['config']
+            self.assertEqual(config['viscous_scheme'], 'br1-penalty')
+            legacy = Path(tmp)/'legacy'
+            run(legacy, **options, max_steps=1)
+            checkpoint = torch.load(legacy/'checkpoint.pt', weights_only=False)
+            checkpoint['config'].pop('viscous_scheme')
+            checkpoint['config'].pop('penalty')
+            torch.save(checkpoint, legacy/'checkpoint.pt')
+            run(legacy, **options, resume=True)
+
     def test_statistics_frequency_and_checkpoint_separation(self):
         with tempfile.TemporaryDirectory() as tmp:
             options = dict(cells=(3, 3, 3), final_time=.08, cfl=.3, checkpoint_interval=2,

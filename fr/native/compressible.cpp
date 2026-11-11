@@ -1,4 +1,4 @@
-// Shared CPU FP64 curved-element Euler / BR1 Navier--Stokes.
+// Shared CPU FP64 curved-element Euler / configurable viscous Navier--Stokes.
 // ATen owns every buffer; no raw-pointer Python ABI or external state.
 #include <ATen/ATen.h>
 #include <ATen/Parallel.h>
@@ -20,10 +20,20 @@ struct Plan {
   const double *base, *h, *weight;
   const int64_t *ids, *neighbor, *tag;
   double mu, heat, diff;
+  bool ldg;
   Plan(const Tensor& u, const Tensors& d, double viscosity, double pr,
        double diffusion): mu(viscosity), heat(viscosity*3.5/pr), diff(diffusion) {
     TORCH_CHECK(std::isfinite(viscosity) && viscosity>=0 && std::isfinite(pr) && pr>0, "invalid viscosity or Prandtl number");
-    TORCH_CHECK(d.size()==14, "expected 14 mesh tensors");
+    TORCH_CHECK(d.size()==14 || d.size()==15, "expected 14 mesh tensors and optional viscous scheme");
+    ldg=false;
+    if(d.size()==15) {
+      auto scheme=d.get(14);
+      TORCH_CHECK(scheme.device().is_cpu() && scheme.scalar_type()==at::kLong && scheme.numel()==1,
+                  "invalid viscous scheme tensor");
+      int64_t value=scheme.item<int64_t>();
+      TORCH_CHECK(value==0 || value==1,"unknown viscous scheme");
+      ldg=value==1;
+    }
     TORCH_CHECK(u.device().is_cpu() && u.scalar_type()==at::kDouble &&
                 u.is_contiguous() && u.dim()==2 && u.size(1)==4,
                 "state must be contiguous CPU float64 (ndof,4)");
@@ -99,7 +109,7 @@ struct Workspace {
   }
 };
 
-template<bool viscous>
+template<bool viscous,bool ldg=false>
 void rhs_kernel_impl(const Tensor& U,Tensor& out,const Plan& p,Workspace& ws) {
   const double* u=U.const_data_ptr<double>(); double* result=out.mutable_data_ptr<double>();
   double *w=ws.w.mutable_data_ptr<double>(), *l=ws.l.mutable_data_ptr<double>();
@@ -121,7 +131,7 @@ void rhs_kernel_impl(const Tensor& U,Tensor& out,const Plan& p,Workspace& ws) {
       }
     }
   });
-  // BR1 gradient and its own-cell traces. Scratch is local to each worker.
+  // Paired LDG or averaged BR1 gradient. Scratch is local to each worker.
   if constexpr(viscous) at::parallel_for(0,p.ne,16,[&](int64_t begin,int64_t end) {
     std::vector<double> qv(p.nq*3), trace(p.edges*p.nf*3);
     for(int64_t e=begin;e<end;++e) {
@@ -133,6 +143,8 @@ void rhs_kernel_impl(const Tensor& U,Tensor& out,const Plan& p,Workspace& ws) {
         for(int v=0;v<3;++v) {
           double t=fr_boundary::primitive_trace(wl[k*3+v],wl[other*3+v],
               v<2?p.far[v+1]:1/1.4,v,p.tag[face]==2,p.tag[face]==1);
+          if constexpr(ldg) if(p.tag[face]==0)
+            t=face>other/p.nf ? wl[other*3+v]:wl[k*3+v];
           trace[(f*p.nf+q)*3+v]=t;
         }
       }
@@ -192,9 +204,15 @@ void rhs_kernel_impl(const Tensor& U,Tensor& out,const Plan& p,Workspace& ws) {
           jump[v]=fr_boundary::primitive_jump(wl[k*3+v],wl[other*3+v],
               v<2?p.far[v+1]:1/1.4,v,p.tag[face]==2,p.tag[face]==1);
         }
-        double visc[4]; for(int v=0;v<4;++v) visc[v]=.5*(vl[v]+vr[v]);
-        visc[1]+=p.penalty[k]*jump[0]; visc[2]+=p.penalty[k]*jump[1];
-        visc[3]+=p.penalty[k]*(p.heat/p.mu)*jump[2];
+        double visc[4];
+        for(int v=0;v<4;++v) {
+          if constexpr(ldg) visc[v]=p.tag[face]!=0 || face>other/p.nf ? vl[v]:vr[v];
+          else visc[v]=.5*(vl[v]+vr[v]);
+        }
+        if constexpr(!ldg) {
+          visc[1]+=p.penalty[k]*jump[0]; visc[2]+=p.penalty[k]*jump[1];
+          visc[3]+=p.penalty[k]*(p.heat/p.mu)*jump[2];
+        }
         if(p.tag[face]==2) visc[3]=0.;
         for(int v=0;v<4;++v) c[v]-=visc[v];
         }
@@ -218,7 +236,8 @@ void rhs_kernel_impl(const Tensor& U,Tensor& out,const Plan& p,Workspace& ws) {
 }
 
 void rhs_kernel(const Tensor& u,Tensor& out,const Plan& p,Workspace& ws) {
-  if(p.mu>0) rhs_kernel_impl<true>(u,out,p,ws);
+  if(p.mu>0 && p.ldg) rhs_kernel_impl<true,true>(u,out,p,ws);
+  else if(p.mu>0) rhs_kernel_impl<true,false>(u,out,p,ws);
   else rhs_kernel_impl<false>(u,out,p,ws);
 }
 

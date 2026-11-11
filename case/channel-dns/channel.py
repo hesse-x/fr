@@ -10,7 +10,7 @@ from fr import CartesianNavierStokes
 class Channel(CartesianNavierStokes):
     def __init__(self, cells=(64, 24, 32), p=3, re_tau=180., mach=.1,
                  device='cpu', forcing=1., stretch=1.2,
-                 lengths=(2*math.pi, math.pi), bulk_velocity=15.):
+                 lengths=(2*math.pi, math.pi), bulk_velocity=15., viscous_scheme='ldg', penalty=4.):
         if not (math.isfinite(re_tau) and re_tau > 0 and
                 math.isfinite(mach) and 0 < mach < 1 and
                 math.isfinite(forcing) and forcing >= 0):
@@ -30,7 +30,8 @@ class Channel(CartesianNavierStokes):
         super().__init__(cells, ((0., lengths[0]), (-1., 1.), (0., lengths[1])), p,
                          mu=1/re_tau, wall_temperature=temperature, forcing=forcing,
                          boundary='isothermal-channel', device=device, edges=(None, y_edges, None),
-                         reference_state=[1., 15., 0., 0., temperature/(1.4-1)+112.5])
+                         reference_state=[1., 15., 0., 0., temperature/(1.4-1)+112.5],
+                         viscous_scheme=viscous_scheme, penalty=penalty)
 
     def state(self, velocity, temperature=None):
         temperature = self.temperature if temperature is None else temperature

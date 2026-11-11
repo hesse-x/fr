@@ -25,8 +25,9 @@ class CompressibleReference:
         speed = (velocity.norm(dim=-1)+(1.4*pressure/rho).sqrt()).amax(1)
         dt = (cfl*self.base_step/speed)[:,None,None]
         if hasattr(self.physics, 'mu'):
+            penalty = self.penalty if self.viscous_scheme == 'br1-penalty' else 1.
             diffusion = (self.viscous_step_factor*cfl*self.h**2*rho.amin(1)/
-                (16*self.penalty*(self.s.p+1)**4*self.mu*max(4/3,1.4/self.prandtl)))
+                (16*penalty*(self.s.p+1)**4*self.mu*max(4/3,1.4/self.prandtl)))
             dt = torch.minimum(dt,diffusion[:,None,None])
         return dt
 

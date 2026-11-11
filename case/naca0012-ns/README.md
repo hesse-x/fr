@@ -2,6 +2,10 @@
 
 求解二维可压缩层流 NS 方程，翼面静止、无滑移、绝热；不使用湍流模型。采用贴体结构四边形网格、FR-DG 和 native CPU FP64 后端。本文记录当前 1° 攻角基准的配置与结果。
 
+黏性离散现由[框架公共模块](../../fr/viscous.py)提供，默认`--viscous-scheme br1-penalty --penalty 4`，
+也可选择`--viscous-scheme ldg`，两者均有native实现。本文已有气动力结果对应原默认BR1加惩罚；
+新增LDG通过空间算子和短步推进验证，尚未重算完整气动力基准。续算要求相同黏性配置。
+
 ## 网格设计
 
 ![计算域、十字加密区及翼型附近网格](images/structured_mesh.png)

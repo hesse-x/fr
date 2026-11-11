@@ -92,7 +92,7 @@ class NativeFluxStepper:
         self.scales = (self.widths.prod(-1)/8/model.volume).contiguous()
         self.weights = model.s.weights.contiguous()
         self.diffusion_factor = (model.s.p+1)**4*sum(float(h.min())**-2 for h in model.s.widths)*max(
-            4/3*model.mu, model.kappa*(model.eq.gamma-1))
+            4/3*model.mu, model.kappa*(model.eq.gamma-1))*model.viscous_config.timestep_factor
         self.last_force = None
 
     def __call__(self, state, t, dt):

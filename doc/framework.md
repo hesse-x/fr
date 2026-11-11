@@ -2,19 +2,23 @@
 
 算例路径索引见[根README](../README.md)，具体配置与结果见各算例README。
 
+各领域方程、空间离散与边界条件的实现说明见[algorithm.md](algorithm.md)。
+
+未来并行扩展方向见 [MPI + OpenMP 混合并行扩展备忘](mpi-openmp.md)（尚未实施）。
+
 ### 功能范围
 
 | 类别 | 当前支持 |
 |---|---|
 | 一阶空间离散 | 1D/2D/3D Cartesian FR-DG；二维非结构曲边 DG/FR-DG |
-| 二阶空间离散 | Cartesian LDG 梯度、散度、Laplacian 和自定义耦合扩散通量 |
-| 物理方程 | 非线性 Euler、均匀背景线化 Euler、静止/均匀对流声学、Maxwell、含时薛定谔 |
+| 二阶空间离散 | Cartesian LDG / BR1加惩罚；公共NS黏性接口另支持二维曲边三角形/四边形/混合网格 |
+| 物理方程 | 常物性可压缩 Navier–Stokes、非线性 Euler、均匀背景线化 Euler、静止/均匀对流声学、Maxwell、含时薛定谔 |
 | 时间推进 | SSPRK(4,3)、经典 RK4、自定义步进；固定或回调时间步 |
 | 界面通量 | 中心、Rusanov；具备特征分解的系统支持 Roe/迎风；Cartesian Richtmyer 预测通量 |
 | 网格 | Cartesian 张量积；二维共形三角形/四边形/混合网格；ASCII Gmsh MSH 2.2/4.1 |
 | 边界与源项 | 周期、给定外部状态、外推、声学刚壁、Maxwell PEC、标签组合、体源和方向分裂 PML；LDG 支持周期/Dirichlet |
 | 数据与图像 | 按算例输出 JSON、PT、CSV、SVG、VTK，以及 PNG 云图和 GIF 动画 |
-| 验证 | 解析解误差、网格收敛、离散守恒/能量收支、扩大域参考、双缝独立有限差分对照 |
+| 验证 | 解析解误差、网格收敛、离散守恒/能量收支、扩大域参考、[量子双缝与论文数字化曲线对照](../case/quantum_double_slit/README.md) |
 
 默认多项式次数通常为 `p=3`。光滑问题的实际收敛阶取决于方程、通量、边界和时间误差，不能统一宣称四阶；各算例给出实际结果。
 
@@ -43,7 +47,7 @@ python -m unittest discover -s tests -v
 
 - Euler 尚无激波限制器、正性保持器或 Roe 通量；非物理密度/压力会报错。Cartesian 可选通量去混叠，非结构入口使用积分点通量求值；去混叠不替代激波捕捉。
 - 二维非结构离散实现 DG/FR-DG 成员，尚无完整 VCJH 参数族、非共形面或三维非结构体网格。
-- 二阶 LDG 尚未扩展到曲边非结构网格，也未实现 Neumann/混合条件。通用方程接口未内置完整NS；槽道及翼型NS算例在各自目录组装黏性应力和壁面条件。
+- 公共NS黏性接口支持Cartesian及二维曲边上的LDG/BR1加惩罚；通用Cartesian二阶接口尚无Neumann/Robin配置。公共Cartesian NS提供三向周期或y向恒温无滑移壁面；曲边NS通过边界值/通量回调处理壁面及远场。三维曲边网格尚未实现。
 - 固定网格斜向背景流直接复用 PML 属于数值实验，其一般稳定性和长时间完美匹配尚未证明。
 
 ## 模块分工与计算流程
@@ -55,7 +59,8 @@ fr/equations/                 物理方程、特征速度与诊断
 fr/fluxes.py + boundaries.py  公共界面通量与边界回调
   ↓ 空间离散
 fr/core.py                    CartesianFR：1–3 维张量积 FR-DG
-fr/second_order.py            CartesianLDG：复用 Cartesian 网格构造二阶算子
+fr/second_order.py            Cartesian LDG / BR1加惩罚二阶算子
+fr/viscous.py                 NS公共黏性接口、曲边LDG / BR1加惩罚
 fr/unstructured.py            MeshFR2D：二维曲边 DG/FR-DG
   ↓ 半离散右端 rhs(U,t)
 fr/time.py                    RK4 / SSPRK(4,3) / 自定义步进
@@ -64,6 +69,62 @@ fr/output.py + plotting.py    数据导出、云图和动画
 ```
 
 `fr/operators.py` 提供 Gauss 点、插值/微分矩阵和 Radau 修正；`fr/reference.py` 提供二维参考单元基与积分规则；`fr/mesh.py` 管理几何和邻接；`fr/gmsh.py` 提供网格生成工具。算例模块可以安全导入，导入时不会启动计算。
+
+### 公共 Navier–Stokes 与执行预配置
+
+`fr/equations/navier_stokes.py` 的 `NavierStokes` 提供理想气体（R=1）、常黏度、
+Stokes 假设的应力、Fourier 导热及声学/显式黏性联合步长限制；也可以通过
+`make_equation('navier-stokes', dim=3, mu=..., prandtl=.71)` 构造。
+
+`fr/navier_stokes.py` 的 `CartesianNavierStokes` 组装三维 FR/Rusanov 与所选黏性算子。
+`viscous_scheme='ldg'`为默认互补迹LDG，`'br1-penalty'`选择平均迹加跳跃惩罚，
+由独立的`penalty=4.`指定惩罚系数。两者均支持Torch及`native-p3`。
+`boundary='periodic'` 为三向周期；`boundary='isothermal-channel'` 为 x/z 周期、
+y 向静止无滑移恒温壁面，须指定 `wall_temperature`，包含静止壁机械功通量修正。
+`forcing` 是均匀 x 向单位体积力，动量源为 G、能量源为 Gu，默认为零。
+
+```python
+import math
+import torch
+from fr import CartesianNavierStokes
+
+model = CartesianNavierStokes(
+    (8, 8, 8), ((-math.pi, math.pi),)*3, p=3,
+    mu=1/1600, prandtl=.71, boundary='periodic', viscous_scheme='ldg',
+)
+x, y, z = model.s.coords
+velocity = torch.stack((torch.sin(x)*torch.cos(y)*torch.cos(z),
+                        -torch.cos(x)*torch.sin(y)*torch.cos(z),
+                        torch.zeros_like(z)), -1)
+# 此处仅演示接口；完整 Taylor–Green 基准还需配置一致的压力/密度初值。
+U = model.soa(model.eq.conservative(1., velocity, 1/(1.4*.1**2)))
+stepper = model.make_stepper('native-p3')
+valid, dt = stepper.scan(U, cfl=.1)
+U, valid, next_dt = stepper.advance_finish(U, 0., dt, cfl=.1)
+```
+
+| 预配置 | 范围与行为 |
+|---|---|
+| `make_stepper('torch')` | 独立参考实现，SSPRK43；支持 Cartesian 任意阶、设备及对流通量去混叠 |
+| `make_stepper('native-p3')` | CPU FP64、AVX2/FMA、p=3、SoA；4×4×4组、私有halo/scratch、对流/所选黏性方法/局部RK融合 |
+
+两者都返回可调用的 `advance(U,t,dt)`；接入 `integrate` 时使用
+`method=lambda rhs,U,t,dt: stepper(U,t,dt)` 适配其四参数接口。
+`model.rhs` 始终为独立 Torch 参考；native 的 `stepper.plan(U)` 返回公共原生 RHS。
+原生 `scan` 计算有效性和时间步，`advance_finish` 返回状态、有效性与下一时间步，
+可选传入 `NativeMeanAccumulator(model).zeros()` 累计12场矩：ρ、u/v/w、p、T、uu/vv/ww/uv/uw/vw。
+无效步必须丢弃，其可选统计缓冲可能已部分更新。
+
+恒流量是显式选项：`make_stepper('native-p3', constant_mass_flux=True)`，
+也适用于 Torch；它保持初始的体积平均ρu，而非设置一个新的目标值，且要求 `forcing=0`。
+默认不启用约束，适合无驱动周期流动。采样起止、初场、扰动、检查点和运行调度属于算例。
+
+native 边界处理默认 `boundary_mode='separate'`，在组内分别遍历内部与边界面/单元，
+复用 scratch，不新增全域边界数组或同步；`'fused'` 保留为性能和正确性对照。
+不支持的阶数、设备、边界或通量去混叠会明确报错，不静默忽略配置。
+几何可包含非均匀单元宽度。原生实现位于 `fr/native/cartesian_ns/`，导入不编译，
+首次构造时按源码、头文件、编译参数和 Torch 版本缓存到 `/tmp/fr-cartesian-ns-native/`。
+线程数由 `torch.set_num_threads` 控制；分组计划/步进器的调用需串行，不共享给并发任务。
 
 ### Cartesian FR-DG 离散
 
@@ -257,7 +318,23 @@ grad = ldg.gradient(U, t)
 viscous_rhs = ldg.diffusion(U, t, constitutive=viscous_flux)
 ```
 
-这里的 `boundary` 返回实际 Dirichlet 边界值，而非 Euler 接口中的外部状态；散度在这些边界取内部通量。当前接口支持周期和 Dirichlet，尚未提供 Neumann/混合条件、曲边非结构网格上的二阶算子或完整 NS 方程及黏性壁面。一般本构回调的稳定性还需由具体物理模型保证，不能由标量扩散测试代替。
+这里的 `boundary` 返回实际 Dirichlet 边界值，而非 Euler 接口中的外部状态；散度在这些边界取内部通量。这个通用Cartesian接口尚未提供Neumann/Robin条件。`CartesianBR1Penalty`提供相同的梯度/散度接口，标量`diffusion(U,t)`另加入跳跃惩罚；耦合本构的惩罚应由具体物理系统组装。一般本构回调的稳定性还需由具体物理模型保证，不能由标量扩散测试代替。
+
+### 公共NS黏性算子
+
+`fr/viscous.py`提供`ViscousConfig`与`make_viscous_operator(grid,equation,...)`，
+支持1–3维Cartesian及二维曲边三角形/四边形/混合网格。
+`scheme='ldg'`与`'br1-penalty'`使用相同的`gradient(W,t)`、`flux(W,G)`、
+`evaluate(U,t)`及`rhs(U,t)`接口；W为速度和T=p/ρ，U为守恒量。
+`evaluate`返回`(viscous_rhs,face_flux)`，曲边的面通量为外法向通量，Cartesian返回`None`。
+应力和导热由`NavierStokes.viscous_flux_from_primitive`统一提供。
+
+`boundary`返回原始变量边界值：Cartesian签名为`(coords,inside,axis,side,t)`，
+曲边为`(coords,inside,normal,tag,t)`。曲边可另传
+`normal_flux(coords,inside,normal,tag,t,flux)`，返回物理边界修正后的黏性通量。
+恒温槽道的静止壁机械功修正仍由`CartesianNavierStokes`公共组装负责。
+曲边native支持同类二维单元块的两种方法；混合网格使用Torch参考算子。
+完整算法、支持矩阵和验证范围见[algorithm.md](algorithm.md)。
 
 ### 二维曲边与非结构网格
 
@@ -302,5 +379,5 @@ solver = MeshFR2D(mesh, p=3, flux=eq.flux,
 
 ### 验证组织
 
-`tests/` 覆盖参考单元恒等式、多项式精确性、自由流保持、面通量平衡、非自治时间推进、解析解收敛、边界条件、PML 参考对照、二阶算子伴随性质与双缝独立参考。最近一次通用回归共 **83 项测试通过**，槽道专用回归另有 **23 项测试通过**。以下算例中的误差表是各自列明参数下的实测结果。
+`tests/` 覆盖参考单元恒等式、多项式精确性、自由流保持、面通量平衡、非自治时间推进、解析解收敛、边界条件、PML 参考对照、二阶算子伴随性质与双缝指数推进验证。最近一次通用回归共 **83 项测试通过**，槽道专用回归另有 **23 项测试通过**。以下算例中的误差表是各自列明参数下的实测结果。
 

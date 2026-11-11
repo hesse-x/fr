@@ -28,6 +28,8 @@ def main(*, observer_factory=None):
     p.add_argument('--quadrature',type=int,default=6)
     p.add_argument('--cfl',type=float,default=.2)
     p.add_argument('--viscous-step-factor',type=float,default=1.)
+    p.add_argument('--viscous-scheme',choices=['ldg','br1-penalty'],default='br1-penalty')
+    p.add_argument('--penalty',type=float,default=4.,help='positive BR1 jump penalty coefficient')
     p.add_argument('--time',type=float,default=10.,help='target convective time; local mode accumulates minimum pseudo time')
     p.add_argument('--max-steps',type=int,default=10000)
     p.add_argument('--output-every',type=int,default=100,help='residual console/CSV output interval in steps (default: 100); stopping is checked every step')
@@ -39,6 +41,7 @@ def main(*, observer_factory=None):
     if not (0<a.mach<1 and math.isfinite(a.re) and a.re>0 and math.isfinite(a.alpha)
             and math.isfinite(a.cfl) and a.cfl>0 and math.isfinite(a.time) and a.time>=0
             and math.isfinite(a.viscous_step_factor) and a.viscous_step_factor>0
+            and math.isfinite(a.penalty) and a.penalty>0
             and math.isfinite(a.residual_tol) and a.residual_tol>0
             and a.p>=1 and a.quadrature>=a.p+1 and a.max_steps>=0 and a.output_every>0 and a.threads>0):
         p.error('invalid physical or numerical parameters')
@@ -49,7 +52,8 @@ def main(*, observer_factory=None):
         spec=importlib.util.spec_from_file_location('naca_ns_native',Path(__file__).with_name('native.py'))
         native=importlib.util.module_from_spec(spec); spec.loader.exec_module(native)
         physics_class=native.NativeAirfoil
-    physics = physics_class(a.mesh,a.p,a.mach,a.alpha,a.quadrature,reynolds=a.re,viscous_step_factor=a.viscous_step_factor)
+    physics = physics_class(a.mesh,a.p,a.mach,a.alpha,a.quadrature,reynolds=a.re,
+        viscous_step_factor=a.viscous_step_factor,viscous_scheme=a.viscous_scheme,penalty=a.penalty)
     s = physics.s
     U = physics.initial_state() if hasattr(physics, 'initial_state') else physics.far.expand(s.ndof,4).clone()
     mesh_hash=hashlib.sha256(a.mesh.read_bytes()).hexdigest()
@@ -61,6 +65,8 @@ def main(*, observer_factory=None):
             if old.get(key)!=value: raise ValueError(f'restart mismatch: {key}')
         if old.get('method')!='explicit_ssprk43' or old.get('time_mode')!=a.time_mode:
             raise ValueError('restart requires same explicit method and time mode')
+        if old.get('viscous_scheme','br1-penalty')!=a.viscous_scheme or old.get('penalty',4.)!=a.penalty:
+            raise ValueError('restart requires same viscous scheme and penalty')
         U=checkpoint['U'].clone(); t=old['pseudo_time_min']; step=old['steps']; history=checkpoint['history']
     if not physics.valid(U): raise ValueError('invalid initial state')
     rhs=physics.rhs
@@ -97,6 +103,7 @@ def main(*, observer_factory=None):
                    pseudo_time_min=t,convective_time=t*a.mach,time_mode=a.time_mode,
                    method='explicit_ssprk43',implementation=getattr(physics,'implementation','torch'),reynolds=a.re,mach=a.mach,alpha_deg=a.alpha,
                    mu=physics.mu,prandtl=physics.prandtl,p=a.p,quadrature=a.quadrature,cfl=cfl,
+                   viscous_scheme=physics.viscous_scheme,penalty=physics.penalty,
                    viscous_step_factor=a.viscous_step_factor,cells=s.blocks[0]['ne'],ndof=s.ndof,residual=residual,residual_tolerance=a.residual_tol,
                    residual_definition='max over conservative components of physical-volume-weighted RMS RHS',
                    output_every=a.output_every,

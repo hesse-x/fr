@@ -1,4 +1,4 @@
-"""Shared CPU FP64 native Euler/BR1 NS kernels for homogeneous curved meshes."""
+"""Shared CPU FP64 native Euler/NS kernels for homogeneous curved meshes."""
 import hashlib
 import os
 import weakref
@@ -33,7 +33,7 @@ def load_operators():
 class NativeCompressible:
     """Native solver over geometry/load data; calls per instance are sequential."""
     native_backend = True
-    implementation = 'shared native Euler/BR1 NS CPU FP64 C++'
+    implementation = 'shared native compressible CPU FP64 C++'
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -44,18 +44,23 @@ class NativeCompressible:
         h = 2*b['areas']/perimeter
         if hasattr(self, 'mu'):
             mu = self.mu
-            penalty = (mu*self.penalty*(s.p+1)**2/self.face_h[:, None]).expand_as(s.face_jacobian)
-            diffusion = self.viscous_step_factor/(16*self.penalty*(s.p+1)**4*
+            use_ldg = self.viscous_scheme == 'ldg'
+            coefficient = 0. if use_ldg else self.penalty
+            penalty = (mu*coefficient*(s.p+1)**2/self.face_h[:, None]).expand_as(s.face_jacobian)
+            diffusion = self.viscous_step_factor/(16*(1. if use_ldg else self.penalty)*(s.p+1)**4*
                         mu*max(4/3, 1.4/self.prandtl))
+            self.implementation = f'shared native Euler/NS {self.viscous_scheme} CPU FP64 C++'
         else:
             mu = 0.
             penalty = torch.zeros_like(s.face_jacobian)
             diffusion = float('inf')
+            use_ldg = False
         self._native_parameters = (mu, getattr(self, 'prandtl', .72), diffusion)
         self.native_data = [t.contiguous() for t in (
             b['B'], b['face_B'], self.Gx, self.Gy, self.lift_matrix, s.normals,
             penalty, self.far, self.base_step, b['ids'], s.neighbor_points,
             self.mesh.face_tags, h, b['weight'])]
+        self.native_data.append(torch.tensor([int(use_ldg)], dtype=torch.int64))
         tags = self.native_data[11].clone()
         tags[~self.mesh.boundary] = 0
         self.native_data[11] = tags

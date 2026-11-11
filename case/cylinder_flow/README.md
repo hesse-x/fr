@@ -1,5 +1,10 @@
 # 二维圆柱绕流
 
+黏性离散使用[框架公共模块](../../fr/viscous.py)，默认`--viscous-scheme br1-penalty --penalty 4`，
+可切换为`--viscous-scheme ldg`，两种方法均有native实现。
+下文已有结果使用原默认BR1加惩罚；新LDG路径已验证三角形/四边形上的空间算子及短步推进，
+尚未重算完整涡街统计。续算要求相同黏性配置。
+
 圆柱中心 `(0,0)`，直径 `D=1`。默认 `Re_D=100`、`Ma=0.1`、来流沿 +x，采用 NACA0012-NS 的二维可压缩层流 NS 离散：`gamma=1.4`、`Pr=0.72`、`rho_inf=c_inf=D=1`，因此 `U_inf=Ma`、`mu=Ma/Re_D`。CL/CD 以直径和动压归一化。
 
 ## 三角网格结果

@@ -1,4 +1,4 @@
-#include "ldg_kernel.hpp"
+#include "viscous_kernel.hpp"
 #include "scratch.hpp"
 #include <mutex>
 extern "C" void grouped_ldg(
@@ -10,7 +10,7 @@ extern "C" void grouped_ldg(
     double gamma,double mu,double kappa,double wall_temperature,double forcing,
     int groups,int max_owned,int max_active,int max_primitive,
     double* timing) {
-    using namespace fr_ldg;
+    using namespace fr_viscous;
     if(timing) std::fill_n(timing,5,0.);
     std::mutex timing_mutex;
     at::parallel_for(0, groups, 1, [&](int64_t begin, int64_t end) {
@@ -18,7 +18,7 @@ extern "C" void grouped_ldg(
         auto& scratch=fr_scratch::buffer(capacity,1);
         double local[5]={};
         for(int64_t g=begin;g<end;++g) {
-            fr_ldg::group<false>(input,convection,output,elements,g,offsets,primitive_ids,
+            fr_viscous::group<false>(input,convection,output,elements,g,offsets,primitive_ids,
                 active_meta,owned_meta,widths,L,R,primal,dual,gl,gr,gamma,mu,kappa,
                 wall_temperature,forcing,scratch.data(),timing ? local:nullptr);
         }

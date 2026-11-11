@@ -1,8 +1,8 @@
-"""Cartesian FR/LDG compressible NS with explicit boundary/backend presets."""
+"""Cartesian FR compressible NS with configurable viscosity and backend presets."""
 import math
 import torch
 from .core import CartesianFR, rusanov_flux
-from .second_order import CartesianLDG
+from .viscous import make_viscous_operator
 from .equations.navier_stokes import NavierStokes
 
 
@@ -16,7 +16,7 @@ class CartesianNavierStokes:
     def __init__(self, cells, bounds, p=3, *, mu=1/1600, gamma=1.4, prandtl=.71,
                  boundary='periodic', wall_temperature=None, forcing=0.,
                  device='cpu', edges=None, anti_alias='none', quadrature_order=None,
-                 reference_state=None):
+                 reference_state=None, viscous_scheme='ldg', penalty=4.):
         if len(cells) != 3:
             raise ValueError('CartesianNavierStokes requires a three-dimensional grid')
         if boundary not in ('periodic', 'isothermal-channel'):
@@ -36,7 +36,13 @@ class CartesianNavierStokes:
                              numerical_flux=rusanov_flux(self.eq.speed), speed=self.eq.speed,
                              periodic=periodic, boundary=self.wall, device=device, edges=edges,
                              anti_alias=anti_alias, quadrature_order=quadrature_order)
-        self.ldg = CartesianLDG(self.s, boundary=self.wall_primitive)
+        self.viscous_operator = make_viscous_operator(self.s, self.eq,
+            scheme=viscous_scheme, penalty=penalty, boundary=self.wall_primitive)
+        self.viscous_config = self.viscous_operator.config
+        self.viscous_scheme = self.viscous_config.scheme
+        self.penalty = self.viscous_config.penalty
+        # Compatibility for diagnostics that use the derivative pair directly.
+        self.ldg = self.viscous_operator.derivatives
         self.reference_ldg = self.ldg
         def convection(U, t=0., fields=None):
             return self.s.rhs(U, t)
@@ -72,7 +78,7 @@ class CartesianNavierStokes:
         return self.eq.primitive_variables(U)
 
     def viscous_flux(self, U, t=0.):
-        gradient = self.reference_ldg.gradient(self.primitive(U), t)
+        gradient = self.viscous_operator.gradient(self.primitive(U), t)
         return self.eq.viscous_flux(U, gradient)
 
     def _wall_energy_correction(self, U, flux):
@@ -90,7 +96,7 @@ class CartesianNavierStokes:
 
     def rhs(self, U, t=0.):
         flux = self.viscous_flux(U, t)
-        result = self.convection(U, t)+self.reference_ldg.divergence(flux, t)
+        result = self.convection(U, t)+self.viscous_operator.divergence(U, flux, t)
         if self.boundary_preset == 'isothermal-channel':
             result[..., -1:] += self._wall_energy_correction(U, flux)
         result[..., 1] += self.forcing
@@ -98,7 +104,7 @@ class CartesianNavierStokes:
         return result
 
     def timestep(self, U, cfl=.1):
-        return self.eq.timestep(self.s, U, cfl)
+        return self.eq.timestep(self.s, U, cfl, viscous_factor=self.viscous_config.timestep_factor)
 
     def make_stepper(self, preset='torch', *, constant_mass_flux=False,
                      block=(4, 4, 4), boundary_mode='separate'):

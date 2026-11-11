@@ -1,6 +1,6 @@
 // Convective residual stays inside the worker's group scratch, never in global U-sized storage.
 #include "convection_kernel.hpp"
-#include "ldg_kernel.hpp"
+#include "viscous_kernel.hpp"
 #include "scratch.hpp"
 #include <mutex>
 
@@ -28,7 +28,7 @@ static void fused_impl(const double* input,double* output,int64_t elements,
                 static_cast<const double*>(conv[10]),static_cast<const double*>(conv[11]),
                 constants[0],conv_scratch.data(),timing ? local:nullptr);
             auto finish=[&](auto sink) {
-            fr_ldg::group<true,decltype(sink)>(input,value.result,output,elements,g,
+            fr_viscous::group<true,decltype(sink)>(input,value.result,output,elements,g,
                 static_cast<const int64_t*>(ldg[0]),static_cast<const int64_t*>(ldg[1]),
                 static_cast<const int64_t*>(ldg[2]),static_cast<const int64_t*>(ldg[3]),
                 static_cast<const double*>(ldg[4]),static_cast<const double*>(ldg[5]),

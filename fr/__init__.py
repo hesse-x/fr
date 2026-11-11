@@ -18,8 +18,9 @@ from .mesh import Mesh2D
 from .unstructured import MeshFR2D, NormalFace, normal_central, normal_rusanov_flux, make_normal_numerical_flux
 __all__ += ['Mesh2D','MeshFR2D','NormalFace','normal_central','normal_rusanov_flux','make_normal_numerical_flux']
 
-from .second_order import CartesianLDG
-__all__ += ['CartesianLDG']
+from .second_order import CartesianLDG, CartesianBR1Penalty
+from .viscous import ViscousConfig, make_viscous_operator
+__all__ += ['CartesianLDG', 'CartesianBR1Penalty', 'ViscousConfig', 'make_viscous_operator']
 
 from .equations.schrodinger import Schrodinger
 __all__ += ['Schrodinger']

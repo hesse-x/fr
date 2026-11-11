@@ -73,6 +73,8 @@ def main():
     parser.add_argument('--steps', type=int, default=100000, help='absolute final step, including resumed steps')
     parser.add_argument('--mach', type=float, default=.3, help='Mach based on reference velocity 15')
     parser.add_argument('--cfl', type=float, default=1.2)
+    parser.add_argument('--viscous-scheme', choices=('ldg', 'br1-penalty'), default='ldg')
+    parser.add_argument('--penalty', type=float, default=4.)
     parser.add_argument('--threads', type=int, default=8)
     parser.add_argument('--interval', type=int, default=10000)
     parser.add_argument('--perturb-until', type=int, default=30000)
@@ -83,6 +85,7 @@ def main():
             or args.perturb_until < 0 or args.sample_start_step < args.perturb_until
             or not math.isfinite(args.mach) or not 0 < args.mach < 1
             or not math.isfinite(args.cfl) or args.cfl <= 0
+            or not math.isfinite(args.penalty) or args.penalty <= 0
             or not math.isfinite(args.perturbation) or args.perturbation < 0):
         parser.error('invalid grid, counts, Mach, CFL or perturbation')
     args.output.mkdir(parents=True, exist_ok=True)
@@ -99,18 +102,23 @@ def main():
         reference='Moser, Kim & Mansour (1999), chan180.means',
         bulk_target_method='trapezoidal integral of reference U+ over y/h',
         step_backend='group-local-rk-fused-finish', mean_backend='avx2-fused-trapezoid',
-        rhs_backend='group-local-convection-ldg', primitive_reuse=False)
+        rhs_backend='group-local-convection-ldg' if args.viscous_scheme=='ldg' else 'group-local-convection-br1-penalty',
+        primitive_reuse=False, viscous_scheme=args.viscous_scheme, penalty=args.penalty)
     allocator = configure_cpu_memory_reuse(True)
     torch.set_num_threads(args.threads)
     model = Channel(tuple(args.cells), re_tau=config['re_tau'], mach=args.mach, forcing=0.,
-                    lengths=config['lengths'], bulk_velocity=config['bulk_velocity'])
+                    lengths=config['lengths'], bulk_velocity=config['bulk_velocity'],
+                    viscous_scheme=args.viscous_scheme, penalty=args.penalty)
     first_y_plus = config['re_tau']*(1+float(model.s.z[0]))*float(model.s.widths[1][0])/2
     if first_y_plus > 1:
         parser.error('nearest wall Gauss point exceeds reference y+=1')
     mean = NativeMeanAccumulator(model)
     if args.resume:
         saved = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
-        if saved['config'] != config:
+        saved_config = saved['config'].copy()
+        saved_config.setdefault('viscous_scheme', 'ldg')
+        saved_config.setdefault('penalty', 4.)
+        if saved_config != config:
             parser.error('checkpoint numerical configuration differs from supplied arguments')
         U, step, t = saved['U'], saved['step'], saved['time']
         field_integral, duration = saved['field_integral'], saved['sample_duration']
@@ -127,7 +135,8 @@ def main():
     plan = native.plan
     atomic_json(args.output/'run.json', dict(config=config, target_steps=args.steps,
         threads=args.threads, allocator=allocator, pid=process_id(), native_tuning='reuse-first',
-        native_locality=locality_options(), native_fp_contract='fast', native_ldg_halo_pruning=True,
+        native_locality=locality_options(), native_fp_contract='fast',
+        native_ldg_halo_pruning=plan.metadata['dependency_pruned_halo'],
         native_preset='native-p3', native_boundary_mode=plan.metadata['boundary_mode'],
         nearest_gauss_wall_y_plus=first_y_plus, resumed=args.resume))
     started, start_step = time.perf_counter(), step

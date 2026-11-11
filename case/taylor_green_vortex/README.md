@@ -4,6 +4,10 @@
 产生小尺度结构，随后由黏性耗散动能。计算采用公共
 [CartesianNavierStokes](../../fr/navier_stokes.py) 的常物性可压缩 NS 方程和 `native-p3` 预配置。
 
+黏性方法可通过`--viscous-scheme ldg`或`--viscous-scheme br1-penalty --penalty 4`选择，
+均使用[框架公共黏性模块](../../fr/viscous.py)，并支持Torch和native融合推进。
+本文两组完整结果均使用默认LDG；新增BR1选项尚未重算完整DNS。续算检查黏性配置。
+
 已完成 **Ma=0.1 和 Ma=0.3 两组计算，均推进到 t=10**，并与作者公开的高分辨率 FLEXI 结果比较。
 主要关注全场动能、耗散率和涡量平方积分的演化，以及提高 Mach 数以降低显式计算成本时的影响。
 
@@ -29,14 +33,15 @@
 
 初始速度及压力为：
 
-\[
+$$
 u=\sin x\cos y\cos z,\qquad
 v=-\cos x\sin y\cos z,\qquad w=0,
-\]
-\[
+$$
+
+$$
 p=p_0+\frac{(\cos2x+\cos2y)(\cos2z+2)}{16},
 \qquad p_0=\frac{1}{\gamma Ma^2}.
-\]
+$$
 
 本次两组均使用 `initialization='constant-density'`：ρ=1，T=p，以匹配所下载FLEXI参考参数的
 `IniConstDens=T`。改变Mach数只改变背景压力和声速，保持初始速度幅值、Re、网格和物性一致。
@@ -54,12 +59,12 @@ p=p_0+\frac{(\cos2x+\cos2y)(\cos2z+2)}{16},
 下表为 **0≤t≤10整段曲线的相对时间L₂差异**，不是只比较最终时刻。
 比较时将参考线性插值到各组实际统计时刻：
 
-\[
+$$
  e_{L_2}=\left[
  \frac{\int_0^{10}(q(t)-q_{\mathrm{ref}}(t))^2\,dt}
  {\int_0^{10}q_{\mathrm{ref}}(t)^2\,dt}
  \right]^{1/2}.
-\]
+$$
 
 | 统计量 | Ma=0.3相对参考 | Ma=0.1相对参考 | Ma=0.3与0.1直接差异 |
 |---|---:|---:|---:|

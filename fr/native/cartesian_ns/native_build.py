@@ -3,13 +3,16 @@ from pathlib import Path
 from fr.native import aten_compile_flags, header_bytes as shared_header_bytes
 
 
-def compiler_flags(boundary_mode='separate'):
+def compiler_flags(boundary_mode='separate', viscous_config=None):
     if 'avx2' not in Path('/proc/cpuinfo').read_text().split():
         raise RuntimeError('Cartesian NS native solver requires an AVX2 CPU')
     if boundary_mode not in ('separate', 'fused'):
         raise ValueError('boundary_mode must be separate or fused')
     mode = str(int(boundary_mode == 'separate'))
-    return ['-DFR_NS_SPLIT_BOUNDARY='+mode, '-O3', '-std=c++17', '-march=native', '-fopenmp', '-ffp-contract=fast',
+    viscous_flags = []
+    if viscous_config is not None and viscous_config.scheme == 'br1-penalty':
+        viscous_flags = ['-DFR_NS_BR1=1', '-DFR_NS_PENALTY='+repr(float(viscous_config.penalty))]
+    return viscous_flags+['-DFR_NS_SPLIT_BOUNDARY='+mode, '-O3', '-std=c++17', '-march=native', '-fopenmp', '-ffp-contract=fast',
             '-fno-math-errno', '-shared', '-fPIC'] + aten_compile_flags()
 
 

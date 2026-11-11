@@ -1,4 +1,4 @@
-"""AVX2 p=3 LDG: private halo gradients, stresses and dual lifting."""
+"""AVX2 p=3 viscous plans: LDG or BR1 penalty, with private halo scratch."""
 import ctypes
 import hashlib
 import itertools
@@ -12,9 +12,9 @@ from .native_build import header_bytes, compiler_flags
 _LIBRARIES = {}
 
 
-def load_library(boundary_mode='separate'):
+def load_library(boundary_mode='separate', viscous_config=None):
     source = Path(__file__).with_name('kernels')/'grouped_ldg.cpp'
-    flags = compiler_flags(boundary_mode)
+    flags = compiler_flags(boundary_mode, viscous_config)
     key = hashlib.sha256(source.read_bytes()+header_bytes()+torch.__version__.encode()+' '.join(flags).encode()).hexdigest()[:16]
     if key in _LIBRARIES:
         return _LIBRARIES[key]
@@ -38,13 +38,13 @@ def load_library(boundary_mode='separate'):
     return library
 
 
-class GroupedLDG:
+class GroupedViscous:
     def __init__(self, model, block=(4, 2, 4), *, boundary_mode='separate'):
         validate_model(model)
         if (model.s.p != 3 or model.s.z.device.type != 'cpu'
                 or model.s.dim != 3
                 or model.s.periodic not in ((True, True, True), (True, False, True))):
-            raise ValueError('expected CPU p=3 periodic or isothermal-channel NS LDG')
+            raise ValueError('expected CPU p=3 periodic or isothermal-channel NS')
         if len(block) != 3 or any(not isinstance(n, int) or isinstance(n, bool) or n < 1 for n in block):
             raise ValueError('three positive tile dimensions required')
         self.shape = tuple(model.s.shape)+(5,)
@@ -52,7 +52,7 @@ class GroupedLDG:
         nx, ny, nz = self.cells
         self.count = nx*ny*nz
         self.constants = (model.eq.gamma, model.mu, model.kappa, model.temperature, model.forcing)
-        self.library = load_library(boundary_mode)
+        self.library = load_library(boundary_mode, model.viscous_config)
 
         def coord(old):
             return [old//(ny*nz), old//nz % ny, old % nz]
@@ -66,6 +66,7 @@ class GroupedLDG:
                 c[axis] %= self.cells[axis]
             return (c[0]*ny+c[1])*nz+c[2]
 
+        centered = model.viscous_scheme == 'br1-penalty'
         offsets, primitive_ids, active_meta, owned_meta = [[0, 0, 0]], [], [], []
         sizes = []
         for corner in itertools.product(*(range(0, n, b) for n, b in zip(self.cells, block))):
@@ -76,24 +77,28 @@ class GroupedLDG:
             active_index = {old: i for i, old in enumerate(active)}
             for old in owned:
                 for axis in range(3):
-                    other = neighbor(old, axis, 1)
-                    if other >= 0 and other not in active_index:
-                        active_index[other] = len(active)
-                        active.append(other)
+                    for step in ((-1, 1) if centered else (1,)):
+                        other = neighbor(old, axis, step)
+                        if other >= 0 and other not in active_index:
+                            active_index[other] = len(active)
+                            active.append(other)
             packed = list(active)
             packed_index = {old: i for i, old in enumerate(packed)}
             for old in active:
                 for axis in range(3):
-                    other = neighbor(old, axis, -1)
-                    if other >= 0 and other not in packed_index:
-                        packed_index[other] = len(packed)
-                        packed.append(other)
+                    for step in ((-1, 1) if centered else (-1,)):
+                        other = neighbor(old, axis, step)
+                        if other >= 0 and other not in packed_index:
+                            packed_index[other] = len(packed)
+                            packed.append(other)
             for old in active:
                 minus = [packed_index.get(neighbor(old, axis, -1), -1) for axis in range(3)]
                 y = old//nz % ny
-                active_meta.append([*minus, int(not model.s.periodic[1] and y == 0), int(not model.s.periodic[1] and y == ny-1)])
+                plus = [packed_index.get(neighbor(old, axis, 1), -1) for axis in range(3)] if centered else []
+                active_meta.append([*minus, *plus, int(not model.s.periodic[1] and y == 0), int(not model.s.periodic[1] and y == ny-1)])
             for old in owned:
-                owned_meta.append([active_index.get(neighbor(old, axis, 1), -1) for axis in range(3)])
+                owned_meta.append([active_index.get(neighbor(old, axis, step), -1)
+                                   for step in ((-1, 1) if centered else (1,)) for axis in range(3)])
             primitive_ids.extend(packed)
             offsets.append([len(owned_meta), len(active_meta), len(primitive_ids)])
             sizes.append((len(owned), len(active), len(packed)))
@@ -107,7 +112,7 @@ class GroupedLDG:
                         (model.s.D-model.s.gr[:, None]*model.s.R[None, :]).contiguous(),
                         model.s.gl.contiguous(), model.s.gr.contiguous()]
         self.metadata = dict(block=list(block), groups=self.groups,
-            dependency_pruned_halo=True,
+            dependency_pruned_halo=not centered, viscous_scheme=model.viscous_scheme,
             max_owned=self.max_owned, max_active=self.max_active, max_primitive=self.max_primitive,
             total_owned=len(owned_meta), total_active=len(active_meta), total_primitive=len(primitive_ids),
             gradient_halo_ratio=len(active_meta)/self.count,
@@ -134,3 +139,7 @@ class GroupedLDG:
 
     def make_rhs(self, convection):
         return lambda state, t=0.: self.evaluate(state, convection(state))
+
+
+# Original public name retained for existing benchmark/diagnostic imports.
+GroupedLDG = GroupedViscous

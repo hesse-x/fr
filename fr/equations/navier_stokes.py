@@ -33,10 +33,16 @@ class NavierStokes(Euler):
         if gradient.shape != U.shape[:-1]+(self.dim+1, self.dim):
             raise ValueError('expected gradient of velocity and temperature')
         primitive = self.primitive_variables(U)
+        return self.viscous_flux_from_primitive(primitive, gradient)
+
+    def viscous_flux_from_primitive(self, primitive, gradient):
+        """Same constitutive law for interpolated (velocity, p/rho) values."""
+        if primitive.shape[-1] != self.dim+1 or gradient.shape != primitive.shape+(self.dim,):
+            raise ValueError('expected gradient of velocity and temperature')
         du = gradient[..., :self.dim, :]
         stress = self.mu*(du+du.transpose(-1, -2)
                          -2/3*du.diagonal(dim1=-2, dim2=-1).sum(-1)[..., None, None]
-                         *torch.eye(self.dim, dtype=U.dtype, device=U.device))
+                         *torch.eye(self.dim, dtype=primitive.dtype, device=primitive.device))
         energy = (primitive[..., :self.dim, None]*stress).sum(-2)+self.kappa*gradient[..., self.dim, :]
         return torch.cat((torch.zeros_like(energy[..., None, :]), stress,
                           energy[..., None, :]), -2)
@@ -51,13 +57,13 @@ class NavierStokes(Euler):
         energy = pressure/(self.gamma-1)+.5*rho*velocity.square().sum(-1)
         return torch.cat((rho[..., None], rho[..., None]*velocity, energy[..., None]), -1)
 
-    def timestep(self, grid, U, cfl=.1):
-        if not math.isfinite(cfl) or cfl <= 0:
-            raise ValueError('positive finite CFL required')
+    def timestep(self, grid, U, cfl=.1, *, viscous_factor=1.):
+        if not math.isfinite(cfl) or cfl <= 0 or not math.isfinite(viscous_factor) or viscous_factor <= 0:
+            raise ValueError('positive finite CFL and viscous factor required')
         density, velocity, pressure = self.primitive(U)
         rho = float(density.min())
         diffusivity = max(4/3*self.mu, self.kappa*(self.gamma-1))/rho
-        viscous = cfl/((grid.p+1)**4*sum(float(h.min())**-2 for h in grid.widths)*diffusivity)
+        viscous = cfl/((grid.p+1)**4*sum(float(h.min())**-2 for h in grid.widths)*diffusivity*viscous_factor)
         sound = (self.gamma*pressure/density).sqrt()
         rate = sum((velocity[..., a].abs()+sound)/grid.cell_width(a, variables=False)
                    for a in range(self.dim)).max()
