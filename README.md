@@ -14,6 +14,7 @@ pip install -r requirements.txt
 `requirements.txt` 统一包含数值计算、绘图和声学后处理依赖；自动生成网格另需安装 `gmsh` 命令行程序。NACA0012 与圆柱算例的共享原生算子还需要支持 C++20/OpenMP 的 C++ 编译器。
 
 - [框架设计与API](doc/framework.md)
+- [方程离散与边界条件算法](doc/algorithm.md)
 - [算例通用运行与可视化约定](case/README.md)
 - 各算例的参数、网格、运行命令、结果和性能记录见下表中的独立README。
 
