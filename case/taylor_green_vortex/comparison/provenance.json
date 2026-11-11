@@ -1,0 +1,81 @@
+{
+  "description": "Archived final Ma0.3/Ma0.1/reference plots and comparison data",
+  "reference": "../reference/flexi-ma01-n7-64.csv",
+  "files": [
+    {
+      "file": "reference_comparison.png",
+      "source": "results/taylor_green_vortex/ma01-n64-p3-t10-stats100/comparison/reference_comparison.png",
+      "sha256": "1172851b7cbd966be8725e096dc083ed73f7469deed7e66f93c6cc660cdc28ae"
+    },
+    {
+      "file": "reference_comparison.pdf",
+      "source": "results/taylor_green_vortex/ma01-n64-p3-t10-stats100/comparison/reference_comparison.pdf",
+      "sha256": "a1bd11842239af493922cdc7e016972461b7b3807ecde0cac1ef9f442f9db0fe"
+    },
+    {
+      "file": "dissipation_components.png",
+      "source": "results/taylor_green_vortex/ma01-n64-p3-t10-stats100/comparison/dissipation_components.png",
+      "sha256": "9e771fc812a999f43bac37342caf29505907f2781c598a22be132e82122d8d52"
+    },
+    {
+      "file": "dissipation_components.pdf",
+      "source": "results/taylor_green_vortex/ma01-n64-p3-t10-stats100/comparison/dissipation_components.pdf",
+      "sha256": "8f34ca463fc458711bb0f16240e0f4bab2c6ca8e9dc8610f8241a0d078216506"
+    },
+    {
+      "file": "additional_statistics.png",
+      "source": "results/taylor_green_vortex/ma01-n64-p3-t10-stats100/comparison/additional_statistics.png",
+      "sha256": "f2f897cedabb804059254e1a1a20f73e4ba24fa0e5fb3549e1d330bc2ca0b44e"
+    },
+    {
+      "file": "additional_statistics.pdf",
+      "source": "results/taylor_green_vortex/ma01-n64-p3-t10-stats100/comparison/additional_statistics.pdf",
+      "sha256": "2b3402a8710c44914062ef143b201e5607b64ea5c680d0196d3b083a1995c4fd"
+    },
+    {
+      "file": "comparison.json",
+      "source": "results/taylor_green_vortex/ma01-n64-p3-t10-stats100/comparison/comparison.json",
+      "sha256": "bdff76bf988e358aaee5479921c9b056865c47c0dfb61c9164d3f2d615f83912"
+    },
+    {
+      "file": "ma01-n64-p3-t10-stats100-metrics.csv",
+      "source": "results/taylor_green_vortex/ma01-n64-p3-t10-stats100/comparison/ma01-n64-p3-t10-stats100-metrics.csv",
+      "sha256": "e8b57114d139bc35892b818e57225a0b07a226938252cec9cd87b58b6873a37b"
+    },
+    {
+      "file": "ma03-n64-p3-t10-stats100-metrics.csv",
+      "source": "results/taylor_green_vortex/ma01-n64-p3-t10-stats100/comparison/ma03-n64-p3-t10-stats100-metrics.csv",
+      "sha256": "20bb1e9d3a41416cd5561f92399899f3ebd699c2a4919779ea2519cbf35b8575"
+    },
+    {
+      "file": "ma01-n64-p3-t10-stats100-difference.csv",
+      "source": "results/taylor_green_vortex/ma01-n64-p3-t10-stats100/comparison/ma01-n64-p3-t10-stats100-difference.csv",
+      "sha256": "7e90e2853482638a15d059926b903d2e6362531cdc0ea5e53a67b19fe774f1b2"
+    },
+    {
+      "file": "ma03-n64-p3-t10-stats100-difference.csv",
+      "source": "results/taylor_green_vortex/ma01-n64-p3-t10-stats100/comparison/ma03-n64-p3-t10-stats100-difference.csv",
+      "sha256": "9c7f373d14c5c2cbb4293ab1026b66320036079185025cfb345d98b01caf5636"
+    },
+    {
+      "file": "ma03-history.csv",
+      "source": "results/taylor_green_vortex/ma03-n64-p3-t10-stats100/history.csv",
+      "sha256": "ea06df8d95bf107089b4c0c7b11a1ad2db37b44e5ee7313a3897d13666dfa9ac"
+    },
+    {
+      "file": "ma01-history.csv",
+      "source": "results/taylor_green_vortex/ma01-n64-p3-t10-stats100/history.csv",
+      "sha256": "06d8153b6112f5c97fe8bf1ff2b74f33c1ddf2c9eb94a481695010c6b6437adb"
+    },
+    {
+      "file": "mach_sensitivity.csv",
+      "source": "Derived from archived ma03-history.csv and ma01-history.csv; definition in mach_sensitivity.json",
+      "sha256": "43f3b2b3ba9a65d7ef716155ab45d7df3c1dd607ea46991162b106101ad04f05"
+    },
+    {
+      "file": "mach_sensitivity.json",
+      "source": "Derived from archived ma03-history.csv and ma01-history.csv; definition in mach_sensitivity.json",
+      "sha256": "2c5932ae973753c470865515f430f5f868234bbbb704c7535b931d39ba770e34"
+    }
+  ]
+}

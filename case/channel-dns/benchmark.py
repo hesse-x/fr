@@ -13,9 +13,8 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from channel import Channel
-from grouped_fused import GroupedFused
-from native_step import NativeLocalRKStepper, NativeMeanAccumulator
-from runtime import configure_cpu_memory_reuse
+from fr.native.cartesian_ns import NativeMeanAccumulator
+from fr.native.cartesian_ns.runtime import configure_cpu_memory_reuse
 
 
 @torch.no_grad()
@@ -28,6 +27,8 @@ def main():
     parser.add_argument('--steps', type=int, default=20)
     parser.add_argument('--repeats', type=int, default=5)
     parser.add_argument('--output', type=Path)
+    parser.add_argument('--boundary-mode', choices=('separate', 'fused'),
+                        default='fused' if os.environ.get('FR_CHANNEL_SPLIT_BOUNDARY') == '0' else 'separate')
     args = parser.parse_args()
     if min(*args.cells, args.threads, args.steps, args.repeats) < 1 or args.warmup < 0:
         parser.error('positive grid, threads, steps and repeats required')
@@ -40,8 +41,8 @@ def main():
     model = Channel(tuple(args.cells), re_tau=178.12, mach=args.mach, forcing=0.,
                     lengths=(4*math.pi, 4*math.pi/3), bulk_velocity=15.67873098359455)
     state = model.initial(.5).movedim(-1, 0).contiguous().movedim(0, -1)
-    plan = GroupedFused(model)
-    native = NativeLocalRKStepper(model, plan)
+    native = model.make_stepper('native-p3', constant_mass_flux=True, boundary_mode=args.boundary_mode)
+    plan = native.plan
     integral = NativeMeanAccumulator(model).zeros()
     valid, dt = native.scan(state, 1.2)
     assert valid

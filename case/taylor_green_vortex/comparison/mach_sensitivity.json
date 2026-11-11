@@ -1,0 +1,159 @@
+{
+  "definition": "Ma0.3 linearly interpolated onto Ma0.1 physical times; relative time L2 normalized by Ma0.1; temperature and entropy use increments from initial values",
+  "time_range": [
+    0.0,
+    10.0
+  ],
+  "metrics": [
+    {
+      "quantity": "kinetic_energy",
+      "relative_l2": 0.0029374810565754015,
+      "ma03_final": 0.07455021952940956,
+      "ma01_final": 0.07397676306075095,
+      "final_ratio": 1.0077518459166384
+    },
+    {
+      "quantity": "kinetic_energy_unweighted",
+      "relative_l2": 0.007461136260750213,
+      "ma03_final": 0.07496736522508528,
+      "ma01_final": 0.07402184688378521,
+      "final_ratio": 1.0127735037844237
+    },
+    {
+      "quantity": "turbulent_kinetic_energy",
+      "relative_l2": 0.007461136260705079,
+      "ma03_final": 0.07496736522507128,
+      "ma01_final": 0.0740218468837851,
+      "final_ratio": 1.012773503784236
+    },
+    {
+      "quantity": "uprime",
+      "relative_l2": 0.0039205767029400545,
+      "ma03_final": 0.22355814340656477,
+      "ma01_final": 0.2221438676230417,
+      "final_ratio": 1.006366485821355
+    },
+    {
+      "quantity": "epsilon_kinetic",
+      "relative_l2": 0.026202144172228176,
+      "ma03_final": 0.01162624444691026,
+      "ma01_final": 0.011653693426321152,
+      "final_ratio": 0.9976446111625954
+    },
+    {
+      "quantity": "epsilon_viscous",
+      "relative_l2": 0.013384285356932216,
+      "ma03_final": 0.01149682449311416,
+      "ma01_final": 0.011376748340681687,
+      "final_ratio": 1.010554523035646
+    },
+    {
+      "quantity": "epsilon_strain",
+      "relative_l2": 0.013412172579092243,
+      "ma03_final": 0.011501671099082686,
+      "ma01_final": 0.011378701101783541,
+      "final_ratio": 1.01080703291168
+    },
+    {
+      "quantity": "epsilon_vorticity",
+      "relative_l2": 0.013343018482759117,
+      "ma03_final": 0.011487402643653373,
+      "ma01_final": 0.011372908648938914,
+      "final_ratio": 1.0100672570446736
+    },
+    {
+      "quantity": "enstrophy",
+      "relative_l2": 0.029303797160873217,
+      "ma03_final": 8.975924084679736,
+      "ma01_final": 9.073869611273732,
+      "final_ratio": 0.9892057599690098
+    },
+    {
+      "quantity": "epsilon_dilatation",
+      "relative_l2": 1.3580185030255034,
+      "ma03_final": 9.69321193705493e-06,
+      "ma01_final": 3.9055222037090414e-06,
+      "final_ratio": 2.4819246777932458
+    },
+    {
+      "quantity": "pressure_dilatation",
+      "relative_l2": 1.6436184730043033,
+      "ma03_final": 7.655458414965784e-07,
+      "ma01_final": -0.0001493506821046471,
+      "final_ratio": -0.005125827553704612
+    },
+    {
+      "quantity": "density_rms",
+      "relative_l2": 7.994131455356011,
+      "ma03_final": 0.014238970938415597,
+      "ma01_final": 0.0015929742092138863,
+      "final_ratio": 8.938607327134543
+    },
+    {
+      "quantity": "mean_temperature_normalized",
+      "relative_l2": 8.362251080859515,
+      "ma03_final": 0.0026350938443087113,
+      "ma01_final": 0.00028688268783194637,
+      "final_ratio": 9.185266159568084
+    },
+    {
+      "quantity": "mean_entropy",
+      "relative_l2": 8.114638708539426,
+      "ma03_final": -0.0065021512331382425,
+      "ma01_final": -0.0007161254923460092,
+      "final_ratio": 9.079625432460668
+    }
+  ],
+  "runs": [
+    {
+      "mach": 0.3,
+      "config": {
+        "cells": [
+          64,
+          64,
+          64
+        ],
+        "p": 3,
+        "reynolds": 1600.0,
+        "mach": 0.3,
+        "gamma": 1.4,
+        "prandtl": 0.71,
+        "initialization": "constant-density",
+        "backend": "native-p3",
+        "anti_alias": "none",
+        "quadrature_order": null,
+        "cfl": 0.8,
+        "max_dt": null
+      },
+      "steps": 10410,
+      "time": 10.0,
+      "elapsed_seconds": 6886.16798942117,
+      "samples": 106
+    },
+    {
+      "mach": 0.1,
+      "config": {
+        "cells": [
+          64,
+          64,
+          64
+        ],
+        "p": 3,
+        "reynolds": 1600.0,
+        "mach": 0.1,
+        "gamma": 1.4,
+        "prandtl": 0.71,
+        "initialization": "constant-density",
+        "backend": "native-p3",
+        "anti_alias": "none",
+        "quadrature_order": null,
+        "cfl": 0.8,
+        "max_dt": null
+      },
+      "steps": 28211,
+      "time": 10.0,
+      "elapsed_seconds": 18575.274197560735,
+      "samples": 284
+    }
+  ]
+}

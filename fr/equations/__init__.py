@@ -2,6 +2,7 @@
 from typing import Protocol
 import torch
 from .schrodinger import Schrodinger
+from .navier_stokes import NavierStokes
 from .euler import Euler, GAMMA, primitive, flux, rusanov
 from .linearized_euler import LinearizedEuler
 from .maxwell import Maxwell, MaxwellTMz
@@ -18,7 +19,7 @@ class Equation(Protocol):
 
 def make_equation(name, **parameters):
     """Construct a shared model. State layouts remain equation-specific."""
-    models = {'euler': Euler, 'linearized-euler': LinearizedEuler,
+    models = {'euler': Euler, 'navier-stokes': NavierStokes, 'linearized-euler': LinearizedEuler,
               'maxwell': Maxwell, 'maxwell-tmz': MaxwellTMz, 'acoustics': Acoustics,
               'convected-acoustics': ConvectedAcoustics, 'schrodinger': Schrodinger}
     key = name.lower().replace('_','-')
@@ -27,5 +28,5 @@ def make_equation(name, **parameters):
     return models[key](**parameters)
 
 
-__all__ = ['Schrodinger','Equation','Euler','LinearizedEuler','Maxwell','MaxwellTMz','Acoustics',
+__all__ = ['NavierStokes','Schrodinger','Equation','Euler','LinearizedEuler','Maxwell','MaxwellTMz','Acoustics',
            'ConvectedAcoustics','make_equation','GAMMA','primitive','flux','rusanov']

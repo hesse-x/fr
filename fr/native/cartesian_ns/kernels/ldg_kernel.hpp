@@ -4,9 +4,11 @@
 #include <cmath>
 #include <cstdint>
 #include <vector>
-#include "../../../fr/native/parallel.hpp"
+#include <type_traits>
+#include "../../parallel.hpp"
 #include "rk_sink.hpp"
 #include "avx2.hpp"
+#include "boundaries.hpp"
 using simd::Vec;
 
 namespace fr_ldg {
@@ -54,6 +56,43 @@ inline void group(const double* input,const double* convection,double* output,in
                 }
             }
             if(timing) { pack_total+=fr_parallel::wall_time()-t; t=fr_parallel::wall_time(); }
+#if FR_NS_SPLIT_BOUNDARY
+            auto gradient_sweep = [&](auto wall_tag) {
+                constexpr bool Wall=decltype(wall_tag)::value;
+                for(int axis=0;axis<3;++axis) for(int e=0;e<na;++e) {
+                    const int64_t* meta=active_meta+(as+e)*5;
+                    if(bool(axis==1 && (meta[3] || meta[4]))!=Wall) continue;
+                    int64_t old=primitive_ids[bs+e];
+                    double scale=2/widths[old*3+axis];
+                    for(int c=0;c<4;++c) {
+                        // Diagonal velocity derivatives enter every stress trace;
+                        // off-diagonals enter row/column directions, dT only its row.
+                        int mask=c==3 ? (1<<axis) : (axis==c ? 7 : (1<<axis)|(1<<c));
+                        if(!(needed[e]&mask)) continue;
+                        const double* field=primitive+c*ps+e*N;
+                        for(int f=0;f<F;f+=4) {
+                            Vec lines[4],updated[4];
+                            simd::load_lines(field,axis,f,lines);
+                            Vec wall=fr_ns_boundary::primitive_value(c,wall_temperature);
+                            Vec common=(Wall && meta[3]) ? wall:
+                                simd::trace(primitive+c*ps+meta[axis]*N,axis,f,R);
+                            Vec delta=0.;
+                            if(Wall && meta[4]) delta=wall-simd::trace(field,axis,f,R);
+                            for(int i=0;i<Q;++i) {
+                                Vec value=0.;
+                                for(int j=0;j<Q;++j) value=value+lines[j]*primal[i*Q+j];
+                                value=scale*(value+gl[i]*common);
+                                if(Wall && meta[4]) value=value+(scale*gr[i])*delta;
+                                updated[i]=value;
+                            }
+                            simd::store_lines(gradient+(axis*4+c)*gs+e*N,axis,f,updated);
+                        }
+                    }
+                }
+            };
+            gradient_sweep(std::false_type{});
+            gradient_sweep(std::true_type{});
+#else
             for(int axis=0;axis<3;++axis) for(int e=0;e<na;++e) {
                 const int64_t* meta=active_meta+(as+e)*5;
                 int64_t old=primitive_ids[bs+e];
@@ -67,7 +106,7 @@ inline void group(const double* input,const double* convection,double* output,in
                     for(int f=0;f<F;f+=4) {
                         Vec lines[4],updated[4];
                         simd::load_lines(field,axis,f,lines);
-                        Vec wall=c==3 ? wall_temperature:0.;
+                        Vec wall=fr_ns_boundary::primitive_value(c,wall_temperature);
                         Vec common=(axis==1 && meta[3]) ? wall:
                             simd::trace(primitive+c*ps+meta[axis]*N,axis,f,R);
                         Vec delta=0.;
@@ -83,6 +122,7 @@ inline void group(const double* input,const double* convection,double* output,in
                     }
                 }
             }
+#endif
             if(timing) { gradient_total+=fr_parallel::wall_time()-t; t=fr_parallel::wall_time(); }
             for(int axis=0;axis<3;++axis) {
                 // Halo gradients are recomputed privately, so no global
@@ -107,6 +147,40 @@ inline void group(const double* input,const double* convection,double* output,in
                     }
                 }
                 if(timing) { flux_total+=fr_parallel::wall_time()-t; t=fr_parallel::wall_time(); }
+#if FR_NS_SPLIT_BOUNDARY
+                auto divergence_sweep = [&](auto wall_tag) {
+                    constexpr bool Wall=decltype(wall_tag)::value;
+                    for(int e=0;e<no;++e) {
+                        const int64_t* meta=owned_meta+(os+e)*3;
+                        const int64_t* boundary=active_meta+(as+e)*5;
+                        if(bool(axis==1 && boundary[4])!=Wall) continue;
+                        double scale=2/widths[primitive_ids[bs+e]*3+axis];
+                        for(int c=0;c<4;++c) {
+                            const double* field=flux+c*gs+e*N;
+                            constexpr bool upper=Wall;
+                            const double* neighbor=upper ? field:flux+c*gs+meta[axis]*N;
+                            for(int f=0;f<F;f+=4) {
+                                Vec lines[4],previous[4],updated[4];
+                                simd::load_lines(field,axis,f,lines);
+                                double* dst=viscous+c*vs+e*N;
+                                if(axis==0) for(auto& value:previous) value=0.;
+                                else
+                                simd::load_lines(dst,axis,f,previous);
+                                Vec common=simd::trace(neighbor,axis,f,upper ? R:L);
+                                for(int i=0;i<Q;++i) {
+                                    Vec value=0.;
+                                    for(int j=0;j<Q;++j) value=value+lines[j]*dual[i*Q+j];
+                                    value=scale*(value+gr[i]*common);
+                                    updated[i]=previous[i]+value;
+                                }
+                                simd::store_lines(dst,axis,f,updated);
+                            }
+                        }
+                    }
+                };
+                divergence_sweep(std::false_type{});
+                if(axis==1) divergence_sweep(std::true_type{});
+#else
                 for(int e=0;e<no;++e) {
                     const int64_t* meta=owned_meta+(os+e)*3;
                     const int64_t* boundary=active_meta+(as+e)*5;
@@ -133,6 +207,7 @@ inline void group(const double* input,const double* convection,double* output,in
                         }
                     }
                 }
+#endif
                 if(timing) { divergence_total+=fr_parallel::wall_time()-t; t=fr_parallel::wall_time(); }
             }
             for(int e=0;e<no;++e) {
@@ -146,12 +221,17 @@ inline void group(const double* input,const double* convection,double* output,in
                         double* dst=viscous+3*vs+e*N;
                         simd::load_lines(dst,1,f,values);
                         for(int i=0;i<Q;++i) {
-                            if(boundary[3]) values[i]=values[i]-(scale*gl[i])*left;
-                            if(boundary[4]) values[i]=values[i]-(scale*gr[i])*right;
+                            values[i]=fr_ns_boundary::stationary_wall_energy(values[i],scale,
+                                gl[i],gr[i],left,right,boundary[3],boundary[4]);
                         }
                         simd::store_lines(dst,1,f,values);
                     }
                 }
+#if FR_NS_SPLIT_BOUNDARY
+            }
+            // Finish boundary energy lifting before the uniform output/RK sweep.
+            for(int e=0;e<no;++e) {
+#endif
                 int64_t old=primitive_ids[bs+e];
                 const double* conv_cell=convection+(Local ? e*N:old*N);
                 int64_t conv_stride=Local ? vs:elements*N;

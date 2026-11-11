@@ -10,10 +10,9 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from channel import Channel
-from grouped_fused import GroupedFused
-from native_step import NativeLocalRKStepper, NativeMeanAccumulator
-from native_build import locality_options
-from runtime import configure_cpu_memory_reuse
+from fr.native.cartesian_ns import NativeMeanAccumulator
+from fr.native.cartesian_ns.native_build import locality_options
+from fr.native.cartesian_ns.runtime import configure_cpu_memory_reuse
 
 
 def process_id():
@@ -124,11 +123,12 @@ def main():
         perturbations = [dict(step=0, time=0., amplitude=args.perturbation, kind='initial')]
         diagnostics = []
         mass0 = float(model.s.integral(U)[0])
-    plan = GroupedFused(model)
-    native = NativeLocalRKStepper(model, plan)
+    native = model.make_stepper('native-p3', constant_mass_flux=True)
+    plan = native.plan
     atomic_json(args.output/'run.json', dict(config=config, target_steps=args.steps,
         threads=args.threads, allocator=allocator, pid=process_id(), native_tuning='reuse-first',
         native_locality=locality_options(), native_fp_contract='fast', native_ldg_halo_pruning=True,
+        native_preset='native-p3', native_boundary_mode=plan.metadata['boundary_mode'],
         nearest_gauss_wall_y_plus=first_y_plus, resumed=args.resume))
     started, start_step = time.perf_counter(), step
     checkpoint_step = step if args.resume else None

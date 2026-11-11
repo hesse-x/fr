@@ -3,7 +3,7 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
-#include "../../../fr/native/parallel.hpp"
+#include "../../parallel.hpp"
 #include "avx2.hpp"
 using simd::Vec;
 
@@ -130,7 +130,7 @@ extern "C" void mean_accumulate(const double* previous,const double* current,
         for(int64_t at=begin * 4;at<finish * 4;at+=4) {
             const Primitive a=primitives(previous,count,at,gamma);
             const Primitive b=primitives(current,count,at,gamma);
-            // Match Channel.field_moments order and two sequential trapezoidal adds.
+            // Match the shared 12-field moments order and two sequential trapezoidal adds.
             // The only persistent statistics buffer is the SoA time integral.
             accumulate(integral+at, a.rho,b.rho,weight);
             accumulate(integral+count+at, a.u,b.u,weight);

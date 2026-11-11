@@ -39,6 +39,7 @@ pip install -r requirements.txt
 | [case/naca0012-ns/](case/naca0012-ns/) | NACA0012层流NS绕流，结构四边形、无滑移绝热壁及1°的CL/CD、Cp/Cf分布 | [README](case/naca0012-ns/README.md) |
 | [case/cylinder_flow/](case/cylinder_flow/) | 二维圆柱层流绕流，默认 Re=100 非定常计算 | [README](case/cylinder_flow/README.md) |
 | [case/channel-dns/](case/channel-dns/) | 恒质量流量三维槽道湍流、扰动发展及平均场统计 | [README](case/channel-dns/README.md) |
+| [case/taylor_green_vortex/](case/taylor_green_vortex/) | 三向周期 NS 涡衰减，公共 native-p3、Ma=0.3及公开高分辨率参考对照；Ma=0.1/0.3均完成，含完整统计曲线及Mach数敏感性对照 | [README](case/taylor_green_vortex/README.md) |
 
 ## 待实现算例
 
@@ -46,7 +47,6 @@ pip install -r requirements.txt
 
 | 方向 | 计划内容 | 说明 |
 |---|---|---|
-| Taylor–Green 涡 | 三维周期 NS 涡衰减、高阶精度与去混叠对照 | [README](case/taylor_green_vortex/README.md) |
 | 波动共振 | 双势垒隧穿或光子晶体缺陷波导/谐振腔，待选型 | [README](case/wave_resonance/README.md) |
 | 声学圆柱散射 | 刚性圆柱绕射、散射分布与声学精度验证 | [README](case/acoustic_cylinder_scattering/README.md) |
 

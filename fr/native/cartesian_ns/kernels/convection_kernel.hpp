@@ -5,8 +5,9 @@
 #include <cstdint>
 #include <cstring>
 #include <vector>
-#include "../../../fr/native/parallel.hpp"
+#include "../../parallel.hpp"
 #include "avx2.hpp"
+#include "boundaries.hpp"
 using simd::Vec;
 
 namespace fr_convection {
@@ -83,9 +84,16 @@ inline Group group(const double* input,int64_t elements,int g,
             // Explicitly pack both sides of every unique group interface.
             // A local endpoint reads packed data; an external endpoint reads
             // only its required four-point face interpolation from global U.
+            // Experimental separate interior/boundary face sweeps, group-local.
+#if FR_NS_SPLIT_BOUNDARY
+            for(int boundary_pass=0;boundary_pass<2;++boundary_pass)
+#endif
             for(int f=0;f<nf;++f) {
                 const int64_t* face=faces+(first_face+f)*6;
                 const int axis=face[0], wall=face[5];
+#if FR_NS_SPLIT_BOUNDARY
+                if(bool(wall)!=bool(boundary_pass)) continue;
+#endif
                 double* face_state=face_states;
                 for(int side=0;side<2;++side) {
                     if((wall<0 && side==0)||(wall>0 && side==1)) continue;
@@ -101,7 +109,7 @@ inline Group group(const double* input,int64_t elements,int g,
                     const int ghost=wall<0 ? 0:1, interior=1-ghost;
                     for(int c=0;c<C;++c) for(int n=0;n<F;n+=4) {
                         Vec value=simd::load(face_state+(interior*5+c)*F+n);
-                        if(c==axis+1) value=Vec(_mm256_xor_pd(value.value,_mm256_set1_pd(-0.)));
+                        value=fr_ns_boundary::reflected_momentum(value,c,axis);
                         simd::store(face_state+(ghost*5+c)*F+n,value);
                     }
                 }

@@ -1,0 +1,98 @@
+{
+  "dataset": "doi:10.18419/DARUS-4139",
+  "version": "1.1",
+  "license": "CC BY 4.0",
+  "reference": "FLEXI CPU Ma=0.1 Re=1600, 64^3 elements, p=7, 512^3 solution nodes",
+  "initialization": "constant-density",
+  "source_code": "https://github.com/flexi-framework/flexi/blob/master/src/testcase/taylorgreenvortex/testcase.f90",
+  "diagnostic_source_sha256": "53b4297ca79049b5779f9c9fc2eb9642b2cfd31d92cdd3165c08ab872eaa2d33",
+  "files": [
+    {
+      "path": "flexi-ma01-n7-64.csv",
+      "url": "https://darus.uni-stuttgart.de/api/access/datafile/291392?format=original",
+      "sha256": "555836b4d56d0704ec344cb832375cd4e83481b43422f8e8a00fc5c69846f88b",
+      "metadata": {
+        "description": "",
+        "label": "TGV_Re1600_TGVAnalysis.tab",
+        "restricted": false,
+        "directoryLabel": "TGV_incompressible_Ma0p1/CPU/TGV_CPU_Ma0p1_Re1600_GPU_64x64x64_N7",
+        "version": 1,
+        "datasetVersionId": 5982,
+        "categories": [
+          "Results"
+        ],
+        "dataFile": {
+          "id": 291392,
+          "persistentId": "",
+          "filename": "TGV_Re1600_TGVAnalysis.tab",
+          "contentType": "text/tab-separated-values",
+          "friendlyType": "Tab-Delimited",
+          "filesize": 281694,
+          "description": "",
+          "categories": [
+            "Results"
+          ],
+          "storageIdentifier": "s3://fokus-dv-prod-1:18f154abcc6-40cedc79d64f",
+          "originalFileFormat": "text/csv",
+          "originalFormatLabel": "Comma Separated Values",
+          "originalFileSize": 281884,
+          "originalFileName": "TGV_Re1600_TGVAnalysis.csv",
+          "UNF": "UNF:6:VgaoNJu9HO2/gxrsYvB6gw==",
+          "rootDataFileId": -1,
+          "md5": "94fb07bf68e71aa9566f262d82be01a8",
+          "checksum": {
+            "type": "MD5",
+            "value": "94fb07bf68e71aa9566f262d82be01a8"
+          },
+          "tabularData": true,
+          "creationDate": "2024-04-25",
+          "publicationDate": "2024-05-03",
+          "directoryLabel": "TGV_incompressible_Ma0p1/CPU/TGV_CPU_Ma0p1_Re1600_GPU_64x64x64_N7",
+          "lastUpdateTime": "2024-12-05T10:10:05Z",
+          "fileAccessRequest": true
+        }
+      }
+    },
+    {
+      "path": "parameter_flexi.ini",
+      "url": "https://darus.uni-stuttgart.de/api/access/datafile/291390",
+      "sha256": "7f83216635174d4f0d499891d00e068869bcb705f33fd077068dd4e60f51f8f0",
+      "metadata": {
+        "description": "Parameter file to execute the simulation with GAL\u00c6XI/FLEXI.",
+        "label": "parameter_flexi.ini",
+        "restricted": false,
+        "directoryLabel": "TGV_incompressible_Ma0p1/CPU/TGV_CPU_Ma0p1_Re1600_GPU_64x64x64_N7",
+        "version": 1,
+        "datasetVersionId": 5982,
+        "categories": [
+          "Setup"
+        ],
+        "dataFile": {
+          "id": 291390,
+          "persistentId": "",
+          "filename": "parameter_flexi.ini",
+          "contentType": "application/octet-stream",
+          "friendlyType": "Unknown",
+          "filesize": 3493,
+          "description": "Parameter file to execute the simulation with GAL\u00c6XI/FLEXI.",
+          "categories": [
+            "Setup"
+          ],
+          "storageIdentifier": "s3://fokus-dv-prod-1:18f154ab861-bd2ff527b2da",
+          "rootDataFileId": -1,
+          "md5": "6bb8c940e0d5bcee163c368dd0df8921",
+          "checksum": {
+            "type": "MD5",
+            "value": "6bb8c940e0d5bcee163c368dd0df8921"
+          },
+          "tabularData": false,
+          "creationDate": "2024-04-25",
+          "publicationDate": "2024-05-03",
+          "directoryLabel": "TGV_incompressible_Ma0p1/CPU/TGV_CPU_Ma0p1_Re1600_GPU_64x64x64_N7",
+          "lastUpdateTime": "2024-12-05T10:10:05Z",
+          "fileAccessRequest": true
+        }
+      }
+    }
+  ]
+}

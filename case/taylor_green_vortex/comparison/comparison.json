@@ -1,0 +1,418 @@
+{
+  "reference": "/home/hesse/fr/case/taylor_green_vortex/reference/flexi-ma01-n7-64.csv",
+  "definitions": "Match FLEXI column definitions; physical=DR_Sd+DR_p; epsilon_kinetic reference from second-order np.gradient(Ekin comp, Time); temperature normalized by initial mean; entropy measured relative to initial mean",
+  "runs": [
+    {
+      "directory": "/home/hesse/fr/results/taylor_green_vortex/ma03-n64-p3-t10-stats100",
+      "config": {
+        "cells": [
+          64,
+          64,
+          64
+        ],
+        "p": 3,
+        "reynolds": 1600.0,
+        "mach": 0.3,
+        "gamma": 1.4,
+        "prandtl": 0.71,
+        "initialization": "constant-density",
+        "backend": "native-p3",
+        "anti_alias": "none",
+        "quadrature_order": null,
+        "cfl": 0.8,
+        "max_dt": null
+      },
+      "final_time": 10.0,
+      "comparisons": {
+        "kinetic_energy": {
+          "relative_l2": 0.0020866623183092422,
+          "rms": 0.00023521121132547853,
+          "max_abs": 0.0004165578221194677,
+          "ours_peak": 0.12499999999999997,
+          "reference_peak": 0.125,
+          "ours_peak_time": 0.0,
+          "reference_peak_time": 0.0,
+          "peak_relative_error": -2.220446049250313e-16,
+          "peak_time_error": 0.0
+        },
+        "kinetic_energy_unweighted": {
+          "relative_l2": 0.0064859080704954405,
+          "rms": 0.0007314765541106124,
+          "max_abs": 0.0009170440923565171,
+          "ours_peak": 0.12499999999999997,
+          "reference_peak": 0.125,
+          "ours_peak_time": 0.0,
+          "reference_peak_time": 0.0,
+          "peak_relative_error": -2.220446049250313e-16,
+          "peak_time_error": 0.0
+        },
+        "epsilon_strain": {
+          "relative_l2": 0.019275692916000793,
+          "rms": 0.00012803925698469666,
+          "max_abs": 0.00032017075812044125,
+          "ours_peak": 0.012501993504415958,
+          "reference_peak": 0.012821927199706,
+          "ours_peak_time": 8.944138890244172,
+          "reference_peak_time": 8.9739604567265,
+          "peak_relative_error": -0.024952075480305203,
+          "peak_time_error": -0.02982156648232781
+        },
+        "epsilon_viscous": {
+          "relative_l2": 0.019523094093462673,
+          "rms": 0.0001296823026747056,
+          "max_abs": 0.0003270364367621917,
+          "ours_peak": 0.012494983787377997,
+          "reference_peak": 0.012821871661194,
+          "ours_peak_time": 8.944138890244172,
+          "reference_peak_time": 8.9739604567265,
+          "peak_relative_error": -0.0254945520009644,
+          "peak_time_error": -0.02982156648232781
+        },
+        "epsilon_velocity_gradient": {
+          "relative_l2": 0.01964369523500007,
+          "rms": 0.00013048331732855005,
+          "max_abs": 0.00033032885686789734,
+          "ours_peak": 0.01249163773457502,
+          "reference_peak": 0.012821859882551,
+          "ours_peak_time": 8.944138890244172,
+          "reference_peak_time": 8.9739604567265,
+          "peak_relative_error": -0.025754621482439788,
+          "peak_time_error": -0.02982156648232781
+        },
+        "epsilon_vorticity": {
+          "relative_l2": 0.020023780623354987,
+          "rms": 0.00013300762412063547,
+          "max_abs": 0.00034048695561435076,
+          "ours_peak": 0.012481281964734083,
+          "reference_peak": 0.012821792565397,
+          "ours_peak_time": 8.944138890244172,
+          "reference_peak_time": 8.9739604567265,
+          "peak_relative_error": -0.026557175911726683,
+          "peak_time_error": -0.02982156648232781
+        },
+        "epsilon_dilatation": {
+          "relative_l2": 149.6213894453167,
+          "rms": 5.520146417937377e-06,
+          "max_abs": 1.3909922073356854e-05,
+          "ours_peak": 1.4019434075923688e-05,
+          "reference_peak": 1.1814476705091e-07,
+          "ours_peak_time": 8.944138890244172,
+          "reference_peak_time": 9.2373186700002,
+          "peak_relative_error": 117.66318268571764,
+          "peak_time_error": -0.29317977975602716
+        },
+        "enstrophy": {
+          "relative_l2": 0.04090789807357942,
+          "rms": 0.21668885220952902,
+          "max_abs": 0.5280318693053623,
+          "ours_peak": 9.692829350776144,
+          "reference_peak": 10.222494752047,
+          "ours_peak_time": 8.944138890244172,
+          "reference_peak_time": 8.9739604567265,
+          "peak_relative_error": -0.05181371222174447,
+          "peak_time_error": -0.02982156648232781
+        },
+        "max_vorticity": {
+          "relative_l2": 0.19331433312508614,
+          "rms": 7.316620900804549,
+          "max_abs": 79.01222974082893,
+          "ours_peak": 85.15257210424517,
+          "reference_peak": 146.7788224002,
+          "ours_peak_time": 9.894558866186832,
+          "reference_peak_time": 9.9717962162163,
+          "peak_relative_error": -0.41985791470603095,
+          "peak_time_error": -0.07723735002946697
+        },
+        "uprime": {
+          "relative_l2": 0.003329631031314872,
+          "rms": 0.000909138611478598,
+          "max_abs": 0.001217123296866296,
+          "ours_peak": 0.28867513459481287,
+          "reference_peak": 0.28867513459481,
+          "ours_peak_time": 0.0,
+          "reference_peak_time": 0.0,
+          "peak_relative_error": 9.992007221626409e-15,
+          "peak_time_error": 0.0
+        },
+        "pressure_dilatation": {
+          "relative_l2": 8.868991283629699,
+          "rms": 0.00016210674109802555,
+          "max_abs": 0.0004648749814864474,
+          "ours_peak": -0.0005106793517484827,
+          "reference_peak": -4.9662774011608e-05,
+          "ours_peak_time": 4.660937021113458,
+          "reference_peak_time": 4.6154083538047,
+          "peak_relative_error": 9.282940530650146,
+          "peak_time_error": 0.045528667308758486
+        },
+        "mean_temperature_normalized": {
+          "relative_l2": 0.0009379023601085054,
+          "rms": 0.0009379727422507544,
+          "max_abs": 0.002351372399183038,
+          "ours_peak": 1.0026350938443085,
+          "reference_peak": 1.0002837214451255,
+          "ours_peak_time": 10.0,
+          "reference_peak_time": 10.0,
+          "peak_relative_error": 0.002350705453634694,
+          "peak_time_error": 0.0
+        },
+        "epsilon_kinetic": {
+          "relative_l2": 0.025875770466816744,
+          "rms": 0.00017187753810861577,
+          "max_abs": 0.00041779368507288304,
+          "ours_peak": 0.012656941034347488,
+          "reference_peak": 0.012808259535949995,
+          "ours_peak_time": 9.130755052708738,
+          "reference_peak_time": 8.9739604567265,
+          "peak_relative_error": -0.01181413455729785,
+          "peak_time_error": 0.15679459598223744
+        },
+        "epsilon_physical": {
+          "relative_l2": 0.026271923655566198,
+          "rms": 0.00017447176393466446,
+          "max_abs": 0.00043585076551338336,
+          "ours_peak": 0.0124838554823229,
+          "reference_peak": 0.0128036543386,
+          "ours_peak_time": 9.130755052708738,
+          "reference_peak_time": 8.9739604567265,
+          "peak_relative_error": -0.024977154788768496,
+          "peak_time_error": 0.15679459598223744
+        },
+        "entropy_change": {
+          "relative_l2": 8.190468930085554,
+          "rms": 0.002268108131565244,
+          "max_abs": 0.0057939098551385015,
+          "ours_peak": -0.0065021512331382425,
+          "reference_peak": -0.000708241377999741,
+          "ours_peak_time": 10.0,
+          "reference_peak_time": 10.0,
+          "peak_relative_error": 8.180699455180125,
+          "peak_time_error": 0.0
+        }
+      },
+      "diagnostic_samples": 106,
+      "largest_diagnostic_gap": 0.1017555694630966,
+      "sparse_temporal_sampling": false,
+      "metric_note": "Errors use stored diagnostic times; sparse sampling does not validate curve shape or locate a peak",
+      "max_mass_relative_change": 4.4875214655348827e-13,
+      "max_total_energy_relative_change": 4.1178171983347056e-13,
+      "reference_mach": 0.1,
+      "mach_mismatch": true,
+      "reference_initialization": "constant-density",
+      "initialization_mismatch": false,
+      "resolution_estimate": {
+        "effective_spacing": 0.02454369260617026,
+        "smallest_mean_kolmogorov_eta": 0.011822956420342293,
+        "spacing_over_eta": 2.075935301930148,
+        "nominal_kmax_eta": 1.5133384218038135,
+        "note": "From volume-mean viscous dissipation; nominal Nyquist, not a FR resolution guarantee"
+      }
+    },
+    {
+      "directory": "/home/hesse/fr/results/taylor_green_vortex/ma01-n64-p3-t10-stats100",
+      "config": {
+        "cells": [
+          64,
+          64,
+          64
+        ],
+        "p": 3,
+        "reynolds": 1600.0,
+        "mach": 0.1,
+        "gamma": 1.4,
+        "prandtl": 0.71,
+        "initialization": "constant-density",
+        "backend": "native-p3",
+        "anti_alias": "none",
+        "quadrature_order": null,
+        "cfl": 0.8,
+        "max_dt": null
+      },
+      "final_time": 10.0,
+      "comparisons": {
+        "kinetic_energy": {
+          "relative_l2": 0.0014937117236193365,
+          "rms": 0.0001683737276116,
+          "max_abs": 0.0005627255971990541,
+          "ours_peak": 0.12499999999999997,
+          "reference_peak": 0.125,
+          "ours_peak_time": 0.0,
+          "reference_peak_time": 0.0,
+          "peak_relative_error": -2.220446049250313e-16,
+          "peak_time_error": 0.0
+        },
+        "kinetic_energy_unweighted": {
+          "relative_l2": 0.0014963002434717715,
+          "rms": 0.00016875244050752777,
+          "max_abs": 0.0005630618926977804,
+          "ours_peak": 0.12499999999999997,
+          "reference_peak": 0.125,
+          "ours_peak_time": 0.0,
+          "reference_peak_time": 0.0,
+          "peak_relative_error": -2.220446049250313e-16,
+          "peak_time_error": 0.0
+        },
+        "epsilon_strain": {
+          "relative_l2": 0.016532805767976756,
+          "rms": 0.00010982225354350639,
+          "max_abs": 0.0004160104223807238,
+          "ours_peak": 0.012488856762041485,
+          "reference_peak": 0.012821927199706,
+          "ours_peak_time": 8.900157088920595,
+          "reference_peak_time": 8.9739604567265,
+          "peak_relative_error": -0.025976628355225184,
+          "peak_time_error": -0.07380336780590468
+        },
+        "epsilon_viscous": {
+          "relative_l2": 0.016673265191521586,
+          "rms": 0.00011075500570473807,
+          "max_abs": 0.0004189225897546951,
+          "ours_peak": 0.012485778177432922,
+          "reference_peak": 0.012821871661194,
+          "ours_peak_time": 8.900157088920595,
+          "reference_peak_time": 8.9739604567265,
+          "peak_relative_error": -0.026212513480249555,
+          "peak_time_error": -0.07380336780590468
+        },
+        "epsilon_velocity_gradient": {
+          "relative_l2": 0.016742280589616618,
+          "rms": 0.00011121338422885069,
+          "max_abs": 0.0004203469575724209,
+          "ours_peak": 0.012484281584573683,
+          "reference_peak": 0.012821859882551,
+          "ours_peak_time": 8.900157088920595,
+          "reference_peak_time": 8.9739604567265,
+          "peak_relative_error": -0.02632834090136338,
+          "peak_time_error": -0.07380336780590468
+        },
+        "epsilon_vorticity": {
+          "relative_l2": 0.01695317143618297,
+          "rms": 0.00011261391243374775,
+          "max_abs": 0.00042468349276360284,
+          "ours_peak": 0.012479706407105877,
+          "reference_peak": 0.012821792565397,
+          "ours_peak_time": 8.900157088920595,
+          "reference_peak_time": 8.9739604567265,
+          "peak_relative_error": -0.02668005714071009,
+          "peak_time_error": -0.07380336780590468
+        },
+        "epsilon_dilatation": {
+          "relative_l2": 62.904766921996625,
+          "rms": 2.323481910155411e-06,
+          "max_abs": 6.221997426620984e-06,
+          "ours_peak": 6.330749113865139e-06,
+          "reference_peak": 1.1814476705091e-07,
+          "ours_peak_time": 8.93517121077412,
+          "reference_peak_time": 9.2373186700002,
+          "peak_relative_error": 52.58467642614373,
+          "peak_time_error": -0.3021474592260791
+        },
+        "enstrophy": {
+          "relative_l2": 0.016914114637046125,
+          "rms": 0.08959612100621114,
+          "max_abs": 0.337940357626314,
+          "ours_peak": 9.95027568122373,
+          "reference_peak": 10.222494752047,
+          "ours_peak_time": 8.900157088920595,
+          "reference_peak_time": 8.9739604567265,
+          "peak_relative_error": -0.026629416539319828,
+          "peak_time_error": -0.07380336780590468
+        },
+        "max_vorticity": {
+          "relative_l2": 0.18401609546756623,
+          "rms": 6.992481916851339,
+          "max_abs": 67.45560732780055,
+          "ours_peak": 86.68126815782931,
+          "reference_peak": 146.7788224002,
+          "ours_peak_time": 9.889366756434168,
+          "reference_peak_time": 9.9717962162163,
+          "peak_relative_error": -0.4094429513714971,
+          "peak_time_error": -0.08242945978213179
+        },
+        "uprime": {
+          "relative_l2": 0.0008701768275566165,
+          "rms": 0.00023759802447435472,
+          "max_abs": 0.0008432901185083108,
+          "ours_peak": 0.28867513459481287,
+          "reference_peak": 0.28867513459481,
+          "ours_peak_time": 0.0,
+          "reference_peak_time": 0.0,
+          "peak_relative_error": 9.992007221626409e-15,
+          "peak_time_error": 0.0
+        },
+        "pressure_dilatation": {
+          "relative_l2": 5.677230893680609,
+          "rms": 0.00010351344712886526,
+          "max_abs": 0.0002789591877812086,
+          "ours_peak": -0.00026035112653668264,
+          "reference_peak": -4.9662774011608e-05,
+          "ours_peak_time": 8.93517121077412,
+          "reference_peak_time": 4.6154083538047,
+          "peak_relative_error": 4.242379865366141,
+          "peak_time_error": 4.319762856969421
+        },
+        "mean_temperature_normalized": {
+          "relative_l2": 9.458650928130962e-07,
+          "rms": 9.459360688894373e-07,
+          "max_abs": 3.1612427062732706e-06,
+          "ours_peak": 1.0002868826878317,
+          "reference_peak": 1.0002837214451255,
+          "ours_peak_time": 10.0,
+          "reference_peak_time": 10.0,
+          "peak_relative_error": 3.1603460484141976e-06,
+          "peak_time_error": 0.0
+        },
+        "epsilon_kinetic": {
+          "relative_l2": 0.016094780994800658,
+          "rms": 0.00010691128605880027,
+          "max_abs": 0.0004234802140667144,
+          "ours_peak": 0.01291732098996032,
+          "reference_peak": 0.012808259535949995,
+          "ours_peak_time": 8.900157088920595,
+          "reference_peak_time": 8.9739604567265,
+          "peak_relative_error": 0.00851493161145056,
+          "peak_time_error": -0.07380336780590468
+        },
+        "epsilon_physical": {
+          "relative_l2": 0.009932066961508052,
+          "rms": 6.596028231386907e-05,
+          "max_abs": 0.0003095353468743102,
+          "ours_peak": 0.012738380876338709,
+          "reference_peak": 0.0128036543386,
+          "ours_peak_time": 8.900157088920595,
+          "reference_peak_time": 8.9739604567265,
+          "peak_relative_error": -0.005098033774975197,
+          "peak_time_error": -0.07380336780590468
+        },
+        "entropy_change": {
+          "relative_l2": 0.008539499425357035,
+          "rms": 2.364547892491353e-06,
+          "max_abs": 7.884114346268234e-06,
+          "ours_peak": -0.0007161254923460092,
+          "reference_peak": -0.000708241377999741,
+          "ours_peak_time": 10.0,
+          "reference_peak_time": 10.0,
+          "peak_relative_error": 0.011131959514332657,
+          "peak_time_error": 0.0
+        }
+      },
+      "diagnostic_samples": 284,
+      "largest_diagnostic_gap": 0.036190657204687615,
+      "sparse_temporal_sampling": false,
+      "metric_note": "Errors use stored diagnostic times; sparse sampling does not validate curve shape or locate a peak",
+      "max_mass_relative_change": 1.2172485241990216e-12,
+      "max_total_energy_relative_change": 9.972023207183156e-13,
+      "reference_mach": 0.1,
+      "mach_mismatch": false,
+      "reference_initialization": "constant-density",
+      "initialization_mismatch": false,
+      "resolution_estimate": {
+        "effective_spacing": 0.02454369260617026,
+        "smallest_mean_kolmogorov_eta": 0.011825135047995325,
+        "spacing_over_eta": 2.0755528377945307,
+        "nominal_kmax_eta": 1.5136172861434016,
+        "note": "From volume-mean viscous dissipation; nominal Nyquist, not a FR resolution guarantee"
+      }
+    }
+  ]
+}

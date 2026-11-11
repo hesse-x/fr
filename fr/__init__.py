@@ -23,3 +23,7 @@ __all__ += ['CartesianLDG']
 
 from .equations.schrodinger import Schrodinger
 __all__ += ['Schrodinger']
+
+from .equations.navier_stokes import NavierStokes
+from .navier_stokes import CartesianNavierStokes
+__all__ += ['NavierStokes', 'CartesianNavierStokes']

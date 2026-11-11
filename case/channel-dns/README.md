@@ -6,7 +6,7 @@
 并将平均速度的 **y⁺–U⁺** 曲线与 **Moser、Kim、Mansour（1999）** 的经典槽道数据对比。
 
 生产推进使用 **C++/OpenMP/AVX2/FMA**，Python/Torch 负责几何、状态、日志和结果管理。
-当前只保留最优生产路径及独立的小网格正确性参照；每一步性能优化的做法、收益和取舍见[perf.md](perf.md)。
+通用 NS 与原生生产实现现已迁入框架，算例保留物理配置和独立的小网格正确性检查；每一步性能优化的做法、收益和取舍见[perf.md](perf.md)。
 
 ## 目录与入口
 
@@ -15,8 +15,8 @@
 | [long_run.py](long_run.py) | 运行参数、十万步推进、扰动计划、统计和原子检查点 |
 | [run_logged.py](run_logged.py) | 持久日志、退出状态、成功后的自动后处理 |
 | [channel.py](channel.py) | 物理参数、计算域、网格生成、初场及扰动 |
-| [grouped_fused.py](grouped_fused.py)、[native_step.py](native_step.py) | 组内对流/LDG融合、恒流量RK、CFL/检查和平均场累计 |
-| [native/](native/) | 手写AVX2内核；分组、halo裁剪、scratch复用、非临时存储 |
+| [公共原生NS](../../fr/native/cartesian_ns/) | 组内对流/LDG融合、可选恒流量RK、CFL/检查和平均场累计；本目录同名Python文件仅兼容导入 |
+| [公共内核](../../fr/native/cartesian_ns/kernels/) | 手写AVX2内核及独立边界规则；分组、halo裁剪、scratch复用、非临时存储 |
 | [postprocess.py](postprocess.py) | 从检查点导出三维平均场、剖面和壁面单位 |
 | [compare_wall_units.py](compare_wall_units.py) | 与MKM1999生成对比PNG/PDF、差值CSV/JSON |
 | [benchmark.py](benchmark.py) | 当前完整步进的计时、阶段分解、缺页和CPU占用 |
@@ -25,7 +25,10 @@
 | [results/](results/) | 保留的最新完整计算结果 |
 
 底层通用几何与FR/LDG离散由项目公共库[fr/core.py](../../fr/core.py)和
-[fr/second_order.py](../../fr/second_order.py)提供。
+[fr/second_order.py](../../fr/second_order.py)提供。NS本构与边界组装见[公共Cartesian NS](../../fr/navier_stokes.py)，
+`Channel`继承该组装，仅保留槽道几何、初场、扰动和统计。
+生产入口使用`model.make_stepper('native-p3', constant_mass_flux=True)`；
+原生边界循环默认独立，保留组内缓存复用。公共API及三向周期配置见[框架文档](../../doc/framework.md)。
 
 ## 算的物理问题和默认参数
 
@@ -90,7 +93,7 @@ venv/bin/python case/channel-dns/run_logged.py \
 ## 如何运行与恢复
 
 需要Linux、AVX2 CPU、支持C++17/OpenMP的g++和项目Python依赖。
-原生动态库按源码、头文件、编译参数哈希自动构建到`/tmp/fr-channel-native/`，首次运行可能有编译开销。
+原生动态库按源码、头文件、编译参数哈希自动构建到`/tmp/fr-cartesian-ns-native/`，首次运行可能有编译开销。
 
 ```bash
 # 完整显式配置，与保留的最新结果对应。
