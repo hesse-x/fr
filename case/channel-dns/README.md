@@ -63,7 +63,7 @@ Ma不是局部最大Mach数。Ma=0.3提高了可用时间步，也会改变可�
 
 ## 网格在哪里配置、如何生成
 
-**不需要Gmsh，也不需要预先生成`.msh`文件。** 运行时由`Channel`调用`CartesianFR`自动生成结构化网格。
+默认读取 `mesh/default.json` 中的结构化网格，不依赖 Gmsh。读取由框架 `CartesianMesh.read()` 完成。显式传入 `--cells` 时保留原来的直接生成方式。
 
 - 单元数：命令行 `--cells NX NY NZ`，默认在[long_run.py](long_run.py)中定义。
 - 计算域：同一入口配置为4π×2×4π/3；不是早期小算例的2π×2×π区域。
@@ -211,3 +211,18 @@ venv/bin/python -m unittest discover -s tests -p test_nonuniform_cartesian.py
 
 壁面尺度由两壁平均速度多项式的端点导数计算剪切，再结合壁面密度得到uτ、y⁺、U⁺。
 详细数据流见[algorithm.md](algorithm.md)，标准参考表的来源和列定义见[reference/README.md](reference/README.md)。
+
+## 网格文件与重新生成
+
+命令行入口默认读取 [mesh/default.json](mesh/default.json)。文件采用 `fr-cartesian-v1` JSON 格式，保存三个方向的完整单元边界坐标，三维单元由其张量积确定；求解点仍由框架按阶数生成。统一读写接口为 `fr.CartesianMesh`，不属于三维 Gmsh 非结构网格格式。
+
+从仓库根目录执行：
+
+```bash
+venv/bin/python -m case.channel-dns.generate_mesh
+venv/bin/python case/channel-dns/long_run.py --output results/channel-dns/mesh-run --mesh case/channel-dns/mesh/default.json
+```
+
+生成脚本支持 `--cells NX NY NZ`、`--output PATH` 和 `--stretch`（y 方向双曲正切加密）。`--mesh` 优先于单元数参数，并从文件确定单元数；区域必须符合算例的物理区域。显式指定原来的单元数参数且不传 `--mesh` 时，保留直接生成路径；Python 算例类也支持 `mesh=path`。文件路径不参与续算匹配，文件中的边界坐标保存在运行配置中，防止续算时改变网格。
+
+旧版本直接生成网格的检查点仍应使用原单元数参数续算（channel 用 `--cells`，TGV 用 `--n` 或 `--cells`，LES 用 `--n`），以保持原运行配置。

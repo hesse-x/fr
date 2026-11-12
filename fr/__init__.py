@@ -28,3 +28,6 @@ __all__ += ['Schrodinger']
 from .equations.navier_stokes import NavierStokes
 from .navier_stokes import CartesianNavierStokes
 __all__ += ['NavierStokes', 'CartesianNavierStokes']
+
+from .cartesian_mesh import CartesianMesh
+__all__ += ['CartesianMesh']

@@ -51,7 +51,7 @@ def main():
     parser.add_argument('--threads', type=int, default=8)
     parser.add_argument('--steps', type=int, default=10)
     parser.add_argument('--cfl', type=float, default=.3)
-    parser.add_argument('--output', type=Path, default=Path('results/taylor_green_vertox_les/benchmark.json'))
+    parser.add_argument('--output', type=Path, default=Path('results/taylor_green_vortex_les/benchmark.json'))
     args = parser.parse_args()
     if args.threads < 1 or args.steps < 1:
         parser.error('positive threads and steps required')

@@ -227,3 +227,18 @@ LDG/BR1 黏性及 RK 方法不随该选项变化。Roe 使用 Roe 平均的特�
 它是普通 Roe 加声学熵修正，不是低 Mach 预处理或 L²Roe。
 Roe 被记录在数值配置中，不能用另一种界面通量直接续算；旧 Rusanov 检查点兼容。
 上述已有完整 DNS 结果仍对应 Rusanov，没有因增加选项而重算。
+
+## 网格文件与重新生成
+
+命令行入口默认读取 [mesh/default.json](mesh/default.json)。文件采用 `fr-cartesian-v1` JSON 格式，保存三个方向的完整单元边界坐标，三维单元由其张量积确定；求解点仍由框架按阶数生成。统一读写接口为 `fr.CartesianMesh`，不属于三维 Gmsh 非结构网格格式。
+
+从仓库根目录执行：
+
+```bash
+venv/bin/python -m case.taylor_green_vortex.generate_mesh
+venv/bin/python -m case.taylor_green_vortex --output results/taylor_green_vortex/mesh-run --mesh case/taylor_green_vortex/mesh/default.json
+```
+
+生成脚本支持 `--cells NX NY NZ`、`--output PATH` 和 `--stretch`（y 方向双曲正切加密）。`--mesh` 优先于单元数参数，并从文件确定单元数；区域必须符合算例的物理区域。显式指定原来的单元数参数且不传 `--mesh` 时，保留直接生成路径；Python 算例类也支持 `mesh=path`。文件路径不参与续算匹配，文件中的边界坐标保存在运行配置中，防止续算时改变网格。
+
+旧版本直接生成网格的检查点仍应使用原单元数参数续算（channel 用 `--cells`，TGV 用 `--n` 或 `--cells`，LES 用 `--n`），以保持原运行配置。

@@ -2,7 +2,6 @@
 
 三维可压缩 Taylor–Green 涡，区域 `[-π,π]³`，三向周期、无外力。
 复用 `case.taylor_green_vortex` 的初值、检查点、统计及后处理。
-目录保留请求中的 `vertox` 拼写，物理问题为 Taylor–Green vortex。
 
 默认 `Re=1600, Ma=0.3, γ=1.4, Pr=0.71`，`ρ₀=U₀=L=R=1`，
 常密度初值；分子动力黏度 `μ=1/Re`。默认使用 Vreman SGS 模型，也支持静态 Smagorinsky。
@@ -73,27 +72,27 @@ LES 的 enstrophy 来自已解析场，DNS 未做相同滤波，因此其差异�
 
 ```bash
 taskset -c 0,2,4,6,8,10,12,14 venv/bin/python -u \
-  -m case.taylor_green_vertox_les.run_logged \
+  -m case.taylor_green_vortex_les.run_logged \
   --n 32 --p 3 --sgs vreman --cv 0.07 --filter-width dof --filter-ratio 1 \
   --mach 0.3 --reynolds 1600 --time 10 --cfl 0.3 --threads 8 \
   --backend native-p3 --diagnostic-interval 100 --checkpoint-interval 1000 \
   --snapshot-times --no-fields \
-  --output results/taylor_green_vertox_les/vreman-ma03-n32-p3-t10-stats100
+  --output results/taylor_green_vortex_les/vreman-ma03-n32-p3-t10-stats100
 ```
 
 Smagorinsky 使用同一命令，将 `--sgs vreman --cv 0.07` 换为
 `--sgs smagorinsky --cs 0.1`，输出目录改为
-`results/taylor_green_vertox_les/smag-cs01-ma03-n32-p3-ratio1-t10-stats100`。
+`results/taylor_green_vortex_les/smag-cs01-ma03-n32-p3-ratio1-t10-stats100`。
 原 DNS 统计目录的归档来源见下文“完整统计对比”；不需要为绘图重新运行 DNS。
 
 统一生成四组比较图：
 
 ```bash
 venv/bin/python -m case.taylor_green_vortex.postprocess \
-  results/taylor_green_vertox_les/dns_baselines/ma03-n64-p3-t10-stats100 \
-  results/taylor_green_vertox_les/vreman-ma03-n32-p3-t10-stats100 \
-  results/taylor_green_vertox_les/smag-cs01-ma03-n32-p3-ratio1-t10-stats100 \
-  --output results/taylor_green_vertox_les/sgs-n32-dof-comparison
+  results/taylor_green_vortex_les/dns_baselines/ma03-n64-p3-t10-stats100 \
+  results/taylor_green_vortex_les/vreman-ma03-n32-p3-t10-stats100 \
+  results/taylor_green_vortex_les/smag-cs01-ma03-n32-p3-ratio1-t10-stats100 \
+  --output results/taylor_green_vortex_les/sgs-n32-dof-comparison
 ```
 
 将该结果目录的 `reference_comparison.png`、`dissipation_components.png`、
@@ -133,10 +132,10 @@ SGS 黏性在每个 RK 阶段重算，时间步计入 SGS 黏性和热扩散。
 
 ```bash
 source venv/bin/activate
-python -m case.taylor_green_vertox_les --n 32 --p 3 --time 10 \
+python -m case.taylor_green_vortex_les --n 32 --p 3 --time 10 \
   --backend native-p3 --interface-flux rusanov --anti-alias none \
   --cv 0.07 --turbulent-prandtl 0.9 --cfl 0.3 \
-  --threads 8 --output results/taylor_green_vertox_les/vreman-n32-p3-t10
+  --threads 8 --output results/taylor_green_vortex_les/vreman-n32-p3-t10
 ```
 
 默认 `32³` 单元、`p=3`，每方向 128 个解点，`Δ=2π/128≈0.04909`。
@@ -166,7 +165,7 @@ C++ 公共入口为 `fr/native/cartesian_ns/kernels/sgs.hpp`，提供 `Model`、
 `--snapshot-times` 接受快照时刻列表；空列表关闭快照。
 `--no-plot --no-fields` 可关闭快照绘图和场输出。
 
-默认输出 `results/taylor_green_vertox_les/`，含 `run.json`、`history.csv`、
+默认输出 `results/taylor_green_vortex_les/`，含 `run.json`、`history.csv`、
 `status.json`、检查点及指定时刻快照。原 TGV 统计中 `epsilon_viscous` 等仍表示
 分子贡献；新增 `epsilon_sgs`、`mu_sgs_mean`、`mu_sgs_max`、`mu_sgs_over_mu_max`。
 动能预算残差扣除分子及 SGS 应力耗散，并保留压力膨胀项；它仍可能包含离散误差。
@@ -177,9 +176,9 @@ C++ 公共入口为 `fr/native/cartesian_ns/kernels/sgs.hpp`，提供 `Model`、
 
 ```bash
 python -m unittest tests.test_taylor_green_les tests.test_taylor_green_vortex tests.test_viscous
-python -m case.taylor_green_vertox_les --n 32 --p 3 --time 0.1 \
+python -m case.taylor_green_vortex_les --n 32 --p 3 --time 0.1 \
   --diagnostic-interval 25 --snapshot-times --no-plot --no-fields --threads 8 \
-  --output results/taylor_green_vertox_les/vreman-n32-p3-t01
+  --output results/taylor_green_vortex_les/vreman-n32-p3-t01
 ```
 
 模型测试检查零梯度/单剪切零黏性、解析不变量、旋转不变性、零系数退化、
@@ -190,7 +189,7 @@ python -m case.taylor_green_vertox_les --n 32 --p 3 --time 0.1 \
 动能体积均值由 `0.125` 降至约 `0.12494899`，密度范围约
 `[0.999511, 1.0005]`。第 50～100 步共耗时 29.42 秒，约 `0.588 秒/步`，
 这是优化前版本的测量。移除 Torch 时间步扫描后，同样的 132 步完成于
-`results/taylor_green_vertox_les/vreman-n32-p3-t01-native-scan/`，
+`results/taylor_green_vortex_les/vreman-n32-p3-t01-native-scan/`，
 第 50～100 步约 `0.141 秒/步`，两版本末态最大绝对差约 `3.2×10⁻¹⁴`。
 两项数据包括每 25 步诊断的摊销，排除初始编译和初始化；测试时同时运行了回归检查。
 此结果仅验证执行链路，尚未覆盖 `t≈8–9` 的湍流耗散峰。
@@ -200,10 +199,10 @@ Rusanov 数值耗散与显式 SGS 会叠加，网格尺度或动能解析比例�
 ## 整步性能复现
 
 ```bash
-python -m case.taylor_green_vertox_les.benchmark --threads 8 --steps 10 --cfl 0.3
+python -m case.taylor_green_vortex_les.benchmark --threads 8 --steps 10 --cfl 0.3
 ```
 
-默认输出 `results/taylor_green_vertox_les/benchmark.json`。
+默认输出 `results/taylor_green_vortex_les/benchmark.json`。
 依次测试 `32³ + none`、`32³ + vreman`、`64³ + none`，统一 `p=3, Ma=0.3, Re=1600`。
 每组先预热 3 步，再测 10 步；整步时间包含四个 RK 阶段、状态检查和下一步 CFL
 （含 SGS 扩散）扫描，排除编译、初值构造、诊断和文件输出。
@@ -234,7 +233,7 @@ CFL=0.3，目标 `t=10`，8 个 P 核绑定 `0,2,4,6,8,10,12,14`。
 本次以统计为主，不输出额外场或快照；最终检查点可用于后处理。
 
 ```bash
-taskset -c 0,2,4,6,8,10,12,14 venv/bin/python -u   -m case.taylor_green_vertox_les.run_logged   --n 32 --p 3 --sgs vreman --cv 0.07 --turbulent-prandtl 0.9   --mach 0.3 --reynolds 1600 --time 10 --cfl 0.3 --threads 8   --backend native-p3 --diagnostic-interval 100 --checkpoint-interval 1000   --snapshot-times --no-fields   --compare-with results/taylor_green_vertox_les/dns_baselines/ma03-n64-p3-t10-stats100                  results/taylor_green_vertox_les/dns_baselines/ma01-n64-p3-t10-stats100   --output results/taylor_green_vertox_les/vreman-ma03-n32-p3-t10-stats100
+taskset -c 0,2,4,6,8,10,12,14 venv/bin/python -u   -m case.taylor_green_vortex_les.run_logged   --n 32 --p 3 --sgs vreman --cv 0.07 --turbulent-prandtl 0.9   --mach 0.3 --reynolds 1600 --time 10 --cfl 0.3 --threads 8   --backend native-p3 --diagnostic-interval 100 --checkpoint-interval 1000   --snapshot-times --no-fields   --compare-with results/taylor_green_vortex_les/dns_baselines/ma03-n64-p3-t10-stats100                  results/taylor_green_vortex_les/dns_baselines/ma01-n64-p3-t10-stats100   --output results/taylor_green_vortex_les/vreman-ma03-n32-p3-t10-stats100
 ```
 
 上述两组 DNS 统计从 Git 跟踪的 `case/taylor_green_vortex/comparison/ma03-history.csv`、
@@ -268,7 +267,7 @@ Vreman 原论文第 II 节、式 (35) 后给出均匀各向同性湍流估计 `C
 系数对照，不能先验称为本算例最佳值。固定滤波尺度时，黏性对 Cv 线性变化。
 
 下一组准备显式指定 `--cv 0.025`，其余网格、Mach 数、CFL、Pr_t、统计和比较配置
-全部保持不变，输出到 `results/taylor_green_vertox_les/vreman-cv0025-ma03-n32-p3-t10-stats100/`。
+全部保持不变，输出到 `results/taylor_green_vortex_les/vreman-cv0025-ma03-n32-p3-t10-stats100/`。
 截至本记录仅准备配置，尚未启动。可执行参数数组已保存为原运行目录中的
 `planned-cv0025-run.json`；从初始场重新计算，不从 Cv=0.07 的晚期检查点换系数续算，
 以免混入此前模型对转捩和能量损失的影响。公共模型及 CLI 的标准默认值仍为 0.07。
@@ -276,7 +275,7 @@ Vreman 原论文第 II 节、式 (35) 后给出均匀各向同性湍流估计 `C
 ### Cv=0.025 对照运行已启动
 
 用户确认后，2026-11-11 从初值启动 `Cv=0.025` 对照，目标 `t=10`，输出到
-`results/taylor_green_vertox_les/vreman-cv0025-ma03-n32-p3-t10-stats100/`。
+`results/taylor_green_vortex_les/vreman-cv0025-ma03-n32-p3-t10-stats100/`。
 除系数外，数值配置及统计频率与暂停的 `Cv=0.07` 运行一致。
 比较列表增加该次 Cv=0.07 输出，自动叠加两组系数、原 Ma=0.3/0.1 DNS 及 FLEXI。
 旧系数数据只到 `t=6.614367`，两系数的定量对照应限制在共同时间区间，
@@ -301,7 +300,7 @@ Re=1600、ρ₀=1 时参考运动黏度 `ν=0.000625`。FLEXI 参考在 `t≈8.9
 其余数值参数与原 32³、Cv=0.07 基线相同：Ma=0.3、Re=1600、Pr_t=0.9、CFL=0.3、
 native-p3/LDG、无反混叠、8 个 P 核绑定，每 100 步统计、每 1000 步保存检查点。
 每方向 64 个解点，`δx=2π/64≈0.09817≈8.36η`；η 采用上述参考耗散峰平均尺度。
-输出为 `results/taylor_green_vertox_les/vreman-cv007-ma03-n16-p3-t10-stats100/`。
+输出为 `results/taylor_green_vortex_les/vreman-cv007-ma03-n16-p3-t10-stats100/`。
 比较列表包含两组 DNS、32³/Cv=0.07 及 32³/Cv=0.025；同系数的网格比较只在
 32³/Cv=0.07 已完成的 `t≤6.614367` 共同区间内有直接依据。
 
@@ -342,12 +341,12 @@ native-p3/LDG、无反混叠、8 个 P 核绑定，每 100 步统计、每 1000 
 
 ```bash
 venv/bin/python -m case.taylor_green_vortex.postprocess \
-  results/taylor_green_vertox_les/dns_baselines/ma03-n64-p3-t10-stats100 \
-  results/taylor_green_vertox_les/dns_baselines/ma01-n64-p3-t10-stats100 \
-  results/taylor_green_vertox_les/vreman-ma03-n32-p3-t10-stats100 \
-  results/taylor_green_vertox_les/vreman-cv0025-ma03-n32-p3-t10-stats100 \
-  results/taylor_green_vertox_les/vreman-cv007-ma03-n16-p3-t10-stats100 \
-  --output results/taylor_green_vertox_les/vreman-cv007-ma03-n16-p3-t10-stats100/comparison
+  results/taylor_green_vortex_les/dns_baselines/ma03-n64-p3-t10-stats100 \
+  results/taylor_green_vortex_les/dns_baselines/ma01-n64-p3-t10-stats100 \
+  results/taylor_green_vortex_les/vreman-ma03-n32-p3-t10-stats100 \
+  results/taylor_green_vortex_les/vreman-cv0025-ma03-n32-p3-t10-stats100 \
+  results/taylor_green_vortex_les/vreman-cv007-ma03-n16-p3-t10-stats100 \
+  --output results/taylor_green_vortex_les/vreman-cv007-ma03-n16-p3-t10-stats100/comparison
 ```
 
 原始统计、检查点、完整比较图表及同 Ma DNS 定量汇总均留在对应 results 目录；
@@ -365,19 +364,19 @@ Torch 参考实现，并在 C++ native 界面核内以 AVX2 实现；体通量�
 本次试验固定 `16³, p=3, Cv=0.07, Pr_t=0.9, Ma=0.3, Re=1600, CFL=0.3`，
 8 个 P 核绑定、每 100 步统计、每 1000 步检查点，从初值计算至 t=10。
 仅相对前述 16³ Rusanov 组更改界面通量，输出目录为
-`results/taylor_green_vertox_les/vreman-cv007-ma03-n16-p3-roe-t10-stats100/`。
+`results/taylor_green_vortex_les/vreman-cv007-ma03-n16-p3-roe-t10-stats100/`。
 
 ```bash
 taskset -c 0,2,4,6,8,10,12,14 venv/bin/python -u \
-  -m case.taylor_green_vertox_les.run_logged \
+  -m case.taylor_green_vortex_les.run_logged \
   --n 16 --p 3 --interface-flux roe --sgs vreman --cv 0.07 \
   --turbulent-prandtl 0.9 --mach 0.3 --reynolds 1600 --time 10 \
   --cfl 0.3 --threads 8 --backend native-p3 \
   --diagnostic-interval 100 --checkpoint-interval 1000 --snapshot-times --no-fields \
-  --compare-with results/taylor_green_vertox_les/dns_baselines/ma03-n64-p3-t10-stats100 \
-                 results/taylor_green_vertox_les/dns_baselines/ma01-n64-p3-t10-stats100 \
-                 results/taylor_green_vertox_les/vreman-cv007-ma03-n16-p3-t10-stats100 \
-  --output results/taylor_green_vertox_les/vreman-cv007-ma03-n16-p3-roe-t10-stats100
+  --compare-with results/taylor_green_vortex_les/dns_baselines/ma03-n64-p3-t10-stats100 \
+                 results/taylor_green_vortex_les/dns_baselines/ma01-n64-p3-t10-stats100 \
+                 results/taylor_green_vortex_les/vreman-cv007-ma03-n16-p3-t10-stats100 \
+  --output results/taylor_green_vortex_les/vreman-cv007-ma03-n16-p3-roe-t10-stats100
 ```
 
 
@@ -401,20 +400,20 @@ native-p3 已支持 `flux`、`surf-flux` 和二者组合；插值和离散 L₂ 
 6 个 Gauss 求积点（原解点为每方向 4 个），从初值算至 t=10。
 过积分减轻非线性通量混叠；可压缩通量和 Roe 通量不是一般的有限阶多项式，
 不能声称有限求积点数将所有混叠严格消除。
-输出：`results/taylor_green_vertox_les/vreman-cv007-ma03-n16-p3-roe-aa6-t10-stats100/`。
+输出：`results/taylor_green_vortex_les/vreman-cv007-ma03-n16-p3-roe-aa6-t10-stats100/`。
 
 ```bash
 taskset -c 0,2,4,6,8,10,12,14 venv/bin/python -u \
-  -m case.taylor_green_vertox_les.run_logged \
+  -m case.taylor_green_vortex_les.run_logged \
   --n 16 --p 3 --interface-flux roe --anti-alias 'flux, surf-flux' --quadrature-order 6 \
   --sgs vreman --cv 0.07 --turbulent-prandtl 0.9 --mach 0.3 --reynolds 1600 \
   --time 10 --cfl 0.3 --threads 8 --backend native-p3 \
   --diagnostic-interval 100 --checkpoint-interval 1000 --snapshot-times --no-fields \
-  --compare-with results/taylor_green_vertox_les/dns_baselines/ma03-n64-p3-t10-stats100 \
-                 results/taylor_green_vertox_les/dns_baselines/ma01-n64-p3-t10-stats100 \
-                 results/taylor_green_vertox_les/vreman-cv007-ma03-n16-p3-t10-stats100 \
-                 results/taylor_green_vertox_les/vreman-cv007-ma03-n16-p3-roe-t10-stats100 \
-  --output results/taylor_green_vertox_les/vreman-cv007-ma03-n16-p3-roe-aa6-t10-stats100
+  --compare-with results/taylor_green_vortex_les/dns_baselines/ma03-n64-p3-t10-stats100 \
+                 results/taylor_green_vortex_les/dns_baselines/ma01-n64-p3-t10-stats100 \
+                 results/taylor_green_vortex_les/vreman-cv007-ma03-n16-p3-t10-stats100 \
+                 results/taylor_green_vortex_les/vreman-cv007-ma03-n16-p3-roe-t10-stats100 \
+  --output results/taylor_green_vortex_les/vreman-cv007-ma03-n16-p3-roe-aa6-t10-stats100
 ```
 
 #### Roe＋去混叠完整结果
@@ -478,19 +477,19 @@ p=3 时，`min|ξ|=0.3399810435848562`，所以
 本次固定原 `16³,p=3,Cv=0.07,Pr_t=0.9,Ma=0.3,Re=1600,CFL=0.3`，
 Rusanov、无去混叠、native-p3、8 个 P 核绑定，每100步统计、每1000步检查点。
 从初值计算至 t=10，仅将滤波尺度改成 `gauss-center`。
-输出到 `results/taylor_green_vertox_les/vreman-cv007-ma03-n16-p3-gauss-center-t10-stats100/`。
+输出到 `results/taylor_green_vortex_les/vreman-cv007-ma03-n16-p3-gauss-center-t10-stats100/`。
 
 ```bash
 taskset -c 0,2,4,6,8,10,12,14 venv/bin/python -u \
-  -m case.taylor_green_vertox_les.run_logged \
+  -m case.taylor_green_vortex_les.run_logged \
   --n 16 --p 3 --sgs vreman --cv 0.07 --filter-width gauss-center \
   --interface-flux rusanov --anti-alias none --turbulent-prandtl 0.9 \
   --mach 0.3 --reynolds 1600 --time 10 --cfl 0.3 --threads 8 --backend native-p3 \
   --diagnostic-interval 100 --checkpoint-interval 1000 --snapshot-times --no-fields \
-  --compare-with results/taylor_green_vertox_les/dns_baselines/ma03-n64-p3-t10-stats100 \
-                 results/taylor_green_vertox_les/dns_baselines/ma01-n64-p3-t10-stats100 \
-                 results/taylor_green_vertox_les/vreman-cv007-ma03-n16-p3-t10-stats100 \
-  --output results/taylor_green_vertox_les/vreman-cv007-ma03-n16-p3-gauss-center-t10-stats100
+  --compare-with results/taylor_green_vortex_les/dns_baselines/ma03-n64-p3-t10-stats100 \
+                 results/taylor_green_vortex_les/dns_baselines/ma01-n64-p3-t10-stats100 \
+                 results/taylor_green_vortex_les/vreman-cv007-ma03-n16-p3-t10-stats100 \
+  --output results/taylor_green_vortex_les/vreman-cv007-ma03-n16-p3-gauss-center-t10-stats100
 ```
 
 #### Gauss 中心距离尺度的完整结果
@@ -523,23 +522,23 @@ taskset -c 0,2,4,6,8,10,12,14 venv/bin/python -u \
 `Δ≈0.03337756`；相对上一组16³中心距离尺度，只有网格单元数改变。
 Rusanov、无去混叠、Ma=0.3、Re=1600、Pr_t=0.9、CFL=0.3、native-p3、
 8个P核绑定及统计频率不变。输出：
-`results/taylor_green_vertox_les/vreman-cv007-ma03-n32-p3-gauss-center-t10-stats100/`。
+`results/taylor_green_vortex_les/vreman-cv007-ma03-n32-p3-gauss-center-t10-stats100/`。
 叠图包含原32³/Cv=0.07（仅到t≈6.614）、32³/Cv=0.025、16³中心距离尺度及两组DNS；
 原Cv=0.07宽度对照只能在共同时间段比较，网格对照可在两组完成后比较0～10全段。
 
 ```bash
 taskset -c 0,2,4,6,8,10,12,14 venv/bin/python -u \
-  -m case.taylor_green_vertox_les.run_logged \
+  -m case.taylor_green_vortex_les.run_logged \
   --n 32 --p 3 --sgs vreman --cv 0.07 --filter-width gauss-center \
   --interface-flux rusanov --anti-alias none --turbulent-prandtl 0.9 \
   --mach 0.3 --reynolds 1600 --time 10 --cfl 0.3 --threads 8 --backend native-p3 \
   --diagnostic-interval 100 --checkpoint-interval 1000 --snapshot-times --no-fields \
-  --compare-with results/taylor_green_vertox_les/dns_baselines/ma03-n64-p3-t10-stats100 \
-                 results/taylor_green_vertox_les/dns_baselines/ma01-n64-p3-t10-stats100 \
-                 results/taylor_green_vertox_les/vreman-ma03-n32-p3-t10-stats100 \
-                 results/taylor_green_vertox_les/vreman-cv0025-ma03-n32-p3-t10-stats100 \
-                 results/taylor_green_vertox_les/vreman-cv007-ma03-n16-p3-gauss-center-t10-stats100 \
-  --output results/taylor_green_vertox_les/vreman-cv007-ma03-n32-p3-gauss-center-t10-stats100
+  --compare-with results/taylor_green_vortex_les/dns_baselines/ma03-n64-p3-t10-stats100 \
+                 results/taylor_green_vortex_les/dns_baselines/ma01-n64-p3-t10-stats100 \
+                 results/taylor_green_vortex_les/vreman-ma03-n32-p3-t10-stats100 \
+                 results/taylor_green_vortex_les/vreman-cv0025-ma03-n32-p3-t10-stats100 \
+                 results/taylor_green_vortex_les/vreman-cv007-ma03-n16-p3-gauss-center-t10-stats100 \
+  --output results/taylor_green_vortex_les/vreman-cv007-ma03-n32-p3-gauss-center-t10-stats100
 ```
 
 ### 16³、Δ=h/[2(p+1)] 独立对照
@@ -551,22 +550,22 @@ taskset -c 0,2,4,6,8,10,12,14 venv/bin/python -u \
 
 从初值另起16³/p=3/Cv=0.07/Rusanov/无去混叠，目标t=10，
 `Δ=2π/(16×8)≈0.04908739`，其余物理、CFL和统计配置保持不变。
-输出：`results/taylor_green_vertox_les/vreman-cv007-ma03-n16-p3-half-dof-t10-stats100/`。
+输出：`results/taylor_green_vortex_les/vreman-cv007-ma03-n16-p3-half-dof-t10-stats100/`。
 已有32³中心距离尺度计算继续运行，不覆盖旧结果。两组同时使用相同8个P核，
 并发阶段的墙钟耗时不能当作独立性能基准。
 
 ```bash
 taskset -c 0,2,4,6,8,10,12,14 venv/bin/python -u \
-  -m case.taylor_green_vertox_les.run_logged \
+  -m case.taylor_green_vortex_les.run_logged \
   --n 16 --p 3 --sgs vreman --cv 0.07 --filter-width half-dof \
   --interface-flux rusanov --anti-alias none --turbulent-prandtl 0.9 \
   --mach 0.3 --reynolds 1600 --time 10 --cfl 0.3 --threads 8 --backend native-p3 \
   --diagnostic-interval 100 --checkpoint-interval 1000 --snapshot-times --no-fields \
-  --compare-with results/taylor_green_vertox_les/dns_baselines/ma03-n64-p3-t10-stats100 \
-                 results/taylor_green_vertox_les/dns_baselines/ma01-n64-p3-t10-stats100 \
-                 results/taylor_green_vertox_les/vreman-cv007-ma03-n16-p3-t10-stats100 \
-                 results/taylor_green_vertox_les/vreman-cv007-ma03-n16-p3-gauss-center-t10-stats100 \
-  --output results/taylor_green_vertox_les/vreman-cv007-ma03-n16-p3-half-dof-t10-stats100
+  --compare-with results/taylor_green_vortex_les/dns_baselines/ma03-n64-p3-t10-stats100 \
+                 results/taylor_green_vortex_les/dns_baselines/ma01-n64-p3-t10-stats100 \
+                 results/taylor_green_vortex_les/vreman-cv007-ma03-n16-p3-t10-stats100 \
+                 results/taylor_green_vortex_les/vreman-cv007-ma03-n16-p3-gauss-center-t10-stats100 \
+  --output results/taylor_green_vortex_les/vreman-cv007-ma03-n16-p3-half-dof-t10-stats100
 ```
 
 
@@ -583,15 +582,15 @@ Ma=0.3、Re=1600、Pr_t=0.9、Rusanov、无去混叠、CFL=0.3。
 
 ```bash
 taskset -c 0,2,4,6,8,10,12,14 venv/bin/python -u \
-  -m case.taylor_green_vertox_les.run_logged \
+  -m case.taylor_green_vortex_les.run_logged \
   --n 16 --p 3 --sgs smagorinsky --cs 0.1 --filter-width dof --filter-ratio 2 \
   --mach 0.3 --reynolds 1600 --time 10 --cfl 0.3 --threads 8 \
   --backend native-p3 --diagnostic-interval 100 --checkpoint-interval 1000 \
   --snapshot-times --no-fields \
-  --compare-with results/taylor_green_vertox_les/dns_baselines/ma03-n64-p3-t10-stats100 \
-                 results/taylor_green_vertox_les/vreman-cv007-ma03-n16-p3-half-dof-t10-stats100 \
-                 results/taylor_green_vertox_les/vreman-cv007-ma03-n16-p3-t10-stats100 \
-  --output results/taylor_green_vertox_les/smag-cs01-ma03-n16-p3-ratio2-t10-stats100
+  --compare-with results/taylor_green_vortex_les/dns_baselines/ma03-n64-p3-t10-stats100 \
+                 results/taylor_green_vortex_les/vreman-cv007-ma03-n16-p3-half-dof-t10-stats100 \
+                 results/taylor_green_vortex_les/vreman-cv007-ma03-n16-p3-t10-stats100 \
+  --output results/taylor_green_vortex_les/smag-cs01-ma03-n16-p3-ratio2-t10-stats100
 ```
 
 Smagorinsky 在 native 内按模型专门化，Cs、Pr_t 与宽度倍率为运行时参数，
@@ -619,7 +618,7 @@ Smagorinsky 的衰减率峰值为 0.01125118，位于 t=8.60334；DNS 为
 ### 静态 Smagorinsky，倍率 1（Δ=h/(p+1)）
 
 同一条 Smagorinsky 运行命令将 `--filter-ratio 2` 改为 `--filter-ratio 1`，
-输出改为 `results/taylor_green_vertox_les/smag-cs01-ma03-n16-p3-ratio1-t10-stats100`；
+输出改为 `results/taylor_green_vortex_les/smag-cs01-ma03-n16-p3-ratio1-t10-stats100`；
 对比目录使用同 Ma DNS、倍率 2 的 Smagorinsky 与原宽度 Vreman。
 16³、p=3、Cs=0.1、Ma=0.3、Re=1600、CFL=0.3，其他离散及统计设置不变。
 已完成至 t=10，耗时 131.31 秒；相对同 Ma DNS 的 0～10 时间积分相对 L2
@@ -635,7 +634,7 @@ Smagorinsky 的衰减率峰值为 0.01125118，位于 t=8.60334；DNS 为
 
 32³、p=3、Cs=0.1、Δ=h/(p+1) 的计算已完成至 t=10。
 沿用上述倍率 1 命令，`--n 32`，输出为
-`results/taylor_green_vertox_les/smag-cs01-ma03-n32-p3-ratio1-t10-stats100`。
+`results/taylor_green_vortex_les/smag-cs01-ma03-n32-p3-ratio1-t10-stats100`。
 Ma=0.3、Re=1600、Pr_t=0.9、CFL=0.3、8 线程、native-p3、Rusanov、无去混叠，
 每 100 步统计、1000 步检查点，不输出场快照。
 `--compare-with` 使用同 Ma 的 64³ DNS、16³/倍率 1 的 Smagorinsky，
@@ -650,3 +649,18 @@ Ma=0.3、Re=1600、Pr_t=0.9、CFL=0.3、8 线程、native-p3、Rusanov、无去�
 相较 16³ 的动能 4.356%、衰减率 21.406% 显著改善。
 32³ 高斯中心宽度 Vreman 的对应误差为 1.379%、6.923%，两者整体接近；
 该 Vreman 宽度约为本组的 0.680 倍，不能视为相同宽度下的模型比较。
+
+## 网格文件与重新生成
+
+命令行入口默认读取 [mesh/default.json](mesh/default.json)。文件采用 `fr-cartesian-v1` JSON 格式，保存三个方向的完整单元边界坐标，三维单元由其张量积确定；求解点仍由框架按阶数生成。统一读写接口为 `fr.CartesianMesh`，不属于三维 Gmsh 非结构网格格式。
+
+从仓库根目录执行：
+
+```bash
+venv/bin/python -m case.taylor_green_vortex_les.generate_mesh
+venv/bin/python -m case.taylor_green_vortex_les --output results/taylor_green_vortex_les/mesh-run --mesh case/taylor_green_vortex_les/mesh/default.json
+```
+
+生成脚本支持 `--cells NX NY NZ`、`--output PATH` 和 `--stretch`（y 方向双曲正切加密）。`--mesh` 优先于单元数参数，并从文件确定单元数；区域必须符合算例的物理区域。显式指定原来的单元数参数且不传 `--mesh` 时，保留直接生成路径；Python 算例类也支持 `mesh=path`。文件路径不参与续算匹配，文件中的边界坐标保存在运行配置中，防止续算时改变网格。
+
+旧版本直接生成网格的检查点仍应使用原单元数参数续算（channel 用 `--cells`，TGV 用 `--n` 或 `--cells`，LES 用 `--n`），以保持原运行配置。

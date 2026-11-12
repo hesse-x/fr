@@ -7,14 +7,14 @@ from pathlib import Path
 import time
 
 import torch
-from fr import CartesianNavierStokes
+from fr import CartesianNavierStokes, CartesianMesh
 
 
 class TaylorGreenVortex(CartesianNavierStokes):
     """rho0=U0=L=R=1; Ma changes background pressure, never Re or velocity."""
     def __init__(self, cells=(64, 64, 64), p=3, *, reynolds=1600., mach=.3,
                  gamma=1.4, prandtl=.71, initialization='constant-density', device='cpu', anti_alias='none',
-                 quadrature_order=None, viscous_scheme='ldg', penalty=4., interface_flux='rusanov'):
+                 quadrature_order=None, viscous_scheme='ldg', penalty=4., interface_flux='rusanov', mesh=None):
         if not math.isfinite(reynolds) or reynolds <= 0:
             raise ValueError('positive finite Reynolds number required')
         if not math.isfinite(mach) or not 0 < mach < 1:
@@ -24,7 +24,8 @@ class TaylorGreenVortex(CartesianNavierStokes):
         self.initialization = initialization
         self.reynolds, self.mach = reynolds, mach
         self.p0 = 1/(gamma*mach*mach)
-        super().__init__(cells, ((-math.pi, math.pi),)*3, p, mu=1/reynolds,
+        edges = None if mesh is None else CartesianMesh.read(mesh).require(cells, ((-math.pi, math.pi),)*3)
+        super().__init__(cells, ((-math.pi, math.pi),)*3, p, mu=1/reynolds, edges=edges,
                          gamma=gamma, prandtl=prandtl, device=device,
                          boundary='periodic', forcing=0., anti_alias=anti_alias,
                          quadrature_order=quadrature_order,
@@ -130,7 +131,7 @@ def run(output, *, cells=(64, 64, 64), p=3, reynolds=1600., mach=.3,
         anti_alias='none', quadrature_order=None, final_time=10., cfl=.8,
         max_dt=None, max_steps=None, diagnostic_interval=100, checkpoint_interval=10000,
         snapshot_times=(10.,), sample_points=None, fields=True, plot=True, resume=False, compare_with=(),
-        viscous_scheme='ldg', penalty=4., interface_flux='rusanov', model_class=TaylorGreenVortex, model_options=None):
+        viscous_scheme='ldg', penalty=4., interface_flux='rusanov', model_class=TaylorGreenVortex, model_options=None, mesh=None):
     output = Path(output)
     if not math.isfinite(final_time) or final_time < 0:
         raise ValueError('finite nonnegative final_time required')
@@ -140,10 +141,14 @@ def run(output, *, cells=(64, 64, 64), p=3, reynolds=1600., mach=.3,
         raise ValueError('positive intervals and optional max_steps required')
     if any(not math.isfinite(t) or t < 0 for t in snapshot_times):
         raise ValueError('finite nonnegative snapshot times required')
+    if mesh is not None:
+        cells = CartesianMesh.read(mesh).cells
     config = dict(cells=list(cells), p=p, reynolds=reynolds, mach=mach, gamma=gamma,
                   prandtl=prandtl, initialization=initialization, backend=backend, anti_alias=anti_alias,
                   quadrature_order=quadrature_order, cfl=cfl, max_dt=max_dt,
                   viscous_scheme=viscous_scheme, penalty=penalty)
+    if mesh is not None:
+        config['mesh_edges'] = [e.tolist() for e in CartesianMesh.read(mesh).edges]
     # Keep legacy Rusanov restart configurations byte-for-byte compatible.
     if interface_flux != 'rusanov':
         config['interface_flux'] = interface_flux
@@ -152,7 +157,7 @@ def run(output, *, cells=(64, 64, 64), p=3, reynolds=1600., mach=.3,
     model = model_class(tuple(cells), p, reynolds=reynolds, mach=mach,
                              gamma=gamma, prandtl=prandtl, initialization=initialization, device=device,
                              anti_alias=anti_alias, quadrature_order=quadrature_order,
-                             viscous_scheme=viscous_scheme, penalty=penalty, interface_flux=interface_flux, **(model_options or {}))
+                             viscous_scheme=viscous_scheme, penalty=penalty, interface_flux=interface_flux, mesh=mesh, **(model_options or {}))
     stepper = model.make_stepper(backend, constant_mass_flux=False)
     checkpoint = output/'checkpoint.pt'
     if resume:
@@ -272,7 +277,8 @@ def run(output, *, cells=(64, 64, 64), p=3, reynolds=1600., mach=.3,
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--n', type=int, default=64)
+    parser.add_argument('--mesh', type=Path, help='Cartesian JSON mesh; overrides cell counts')
+    parser.add_argument('--n', type=int)
     parser.add_argument('--cells', nargs=3, type=int)
     parser.add_argument('--p', type=int, default=3)
     parser.add_argument('--mach', type=float, default=.3)
@@ -306,7 +312,9 @@ def main():
     if args.device == 'cpu':
         from fr.native.cartesian_ns.runtime import configure_cpu_memory_reuse
         configure_cpu_memory_reuse()
-    run(args.output, cells=tuple(args.cells or (args.n,)*3), p=args.p, reynolds=args.reynolds,
+    if args.mesh is None and args.cells is None and args.n is None:
+        args.mesh = Path(__file__).with_name('mesh')/'default.json'
+    run(args.output, mesh=args.mesh, cells=tuple(args.cells or (64 if args.n is None else args.n,)*3), p=args.p, reynolds=args.reynolds,
         mach=args.mach, initialization=args.initialization, backend=args.backend, interface_flux=args.interface_flux, device=args.device, anti_alias=args.anti_alias,
         quadrature_order=args.quadrature_order, viscous_scheme=args.viscous_scheme, penalty=args.penalty,
         final_time=args.time, cfl=args.cfl,

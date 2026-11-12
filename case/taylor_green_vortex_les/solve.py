@@ -63,7 +63,7 @@ class TaylorGreenVortexLES(TaylorGreenVortex):
         return result
 
 
-def run(output='results/taylor_green_vertox_les', *, sgs_model='vreman', cv=.07, cs=.1, filter_ratio=1.,
+def run(output='results/taylor_green_vortex_les', *, sgs_model='vreman', cv=.07, cs=.1, filter_ratio=1.,
         turbulent_prandtl=.9, interface_flux='rusanov', anti_alias='none',
         quadrature_order=None, filter_width='dof', **kwargs):
     """Run the original convection baseline unless framework modes are selected."""
@@ -84,7 +84,8 @@ def run(output='results/taylor_green_vertox_les', *, sgs_model='vreman', cv=.07,
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--n', type=int, default=32)
+    parser.add_argument('--mesh', type=Path, help='Cartesian JSON mesh; overrides cell counts')
+    parser.add_argument('--n', type=int)
     parser.add_argument('--p', type=int, default=3)
     parser.add_argument('--sgs', dest='sgs_model', choices=('none', 'vreman', 'smagorinsky'), default='vreman')
     parser.add_argument('--cv', type=float, default=.07)
@@ -113,7 +114,7 @@ def main():
     parser.add_argument('--no-plot', action='store_true')
     parser.add_argument('--no-fields', action='store_true')
     parser.add_argument('--resume', action='store_true')
-    parser.add_argument('--output', type=Path, default=Path('results/taylor_green_vertox_les'))
+    parser.add_argument('--output', type=Path, default=Path('results/taylor_green_vortex_les'))
     args = vars(parser.parse_args())
     if args['threads'] < 1:
         parser.error('positive threads required')
@@ -121,7 +122,10 @@ def main():
     if args['device'] == 'cpu':
         from fr.native.cartesian_ns.runtime import configure_cpu_memory_reuse
         configure_cpu_memory_reuse()
-    args['cells'] = (args.pop('n'),)*3
+    n = args.pop('n')
+    if args['mesh'] is None and n is None:
+        args['mesh'] = Path(__file__).with_name('mesh')/'default.json'
+    args['cells'] = (32 if n is None else n,)*3
     args['final_time'] = args.pop('time')
     args['max_steps'] = args.pop('steps')
     args['plot'] = not args.pop('no_plot')

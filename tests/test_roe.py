@@ -6,7 +6,7 @@ import torch
 from fr.core import Face
 from fr.fluxes import make_numerical_flux
 from fr.equations.navier_stokes import NavierStokes
-from case.taylor_green_vertox_les import TaylorGreenVortexLES, run
+from case.taylor_green_vortex_les import TaylorGreenVortexLES, run
 
 
 class RoeTests(unittest.TestCase):

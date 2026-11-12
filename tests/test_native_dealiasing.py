@@ -2,7 +2,7 @@
 import math
 import unittest
 import torch
-from case.taylor_green_vertox_les import TaylorGreenVortexLES
+from case.taylor_green_vortex_les import TaylorGreenVortexLES
 from fr import CartesianNavierStokes
 
 

@@ -5,7 +5,7 @@ from pathlib import Path
 import tempfile
 import unittest
 import torch
-from case.taylor_green_vertox_les import TaylorGreenVortexLES, run
+from case.taylor_green_vortex_les import TaylorGreenVortexLES, run
 
 
 class LESFilterWidthTests(unittest.TestCase):

@@ -69,7 +69,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--resume', action='store_true')
-    parser.add_argument('--cells', type=int, nargs=3, default=[64, 24, 32])
+    parser.add_argument('--mesh', type=Path, help='Cartesian JSON mesh; overrides cell counts')
+    parser.add_argument('--cells', type=int, nargs=3)
     parser.add_argument('--steps', type=int, default=100000, help='absolute final step, including resumed steps')
     parser.add_argument('--mach', type=float, default=.3, help='Mach based on reference velocity 15')
     parser.add_argument('--cfl', type=float, default=1.2)
@@ -81,6 +82,9 @@ def main():
     parser.add_argument('--sample-start-step', type=int, default=60000)
     parser.add_argument('--perturbation', type=float, default=.5)
     args = parser.parse_args()
+    if args.mesh is None and args.cells is None:
+        args.mesh = Path(__file__).with_name('mesh')/'default.json'
+    args.cells = args.cells or [64, 24, 32]
     if (min(*args.cells, args.steps, args.threads, args.interval) <= 0
             or args.perturb_until < 0 or args.sample_start_step < args.perturb_until
             or not math.isfinite(args.mach) or not 0 < args.mach < 1
@@ -92,6 +96,9 @@ def main():
     checkpoint_path = args.output/'checkpoint.pt'
     if not args.resume and (args.output/'run.json').exists():
         parser.error('output already contains a run; use --resume or another output')
+    if args.mesh is not None:
+        from fr import CartesianMesh
+        args.cells = list(CartesianMesh.read(args.mesh).cells)
     config = dict(cells=args.cells, p=3, stretch=1.2, re_tau=178.12, mach=args.mach,
         cfl=args.cfl, interval=args.interval, perturb_until=args.perturb_until,
         perturbation=args.perturbation, sample_start_step=args.sample_start_step,
@@ -104,9 +111,11 @@ def main():
         step_backend='group-local-rk-fused-finish', mean_backend='avx2-fused-trapezoid',
         rhs_backend='group-local-convection-ldg' if args.viscous_scheme=='ldg' else 'group-local-convection-br1-penalty',
         primitive_reuse=False, viscous_scheme=args.viscous_scheme, penalty=args.penalty)
+    if args.mesh is not None:
+        config['mesh_edges'] = [e.tolist() for e in CartesianMesh.read(args.mesh).edges]
     allocator = configure_cpu_memory_reuse(True)
     torch.set_num_threads(args.threads)
-    model = Channel(tuple(args.cells), re_tau=config['re_tau'], mach=args.mach, forcing=0.,
+    model = Channel(tuple(args.cells), mesh=args.mesh, re_tau=config['re_tau'], mach=args.mach, forcing=0.,
                     lengths=config['lengths'], bulk_velocity=config['bulk_velocity'],
                     viscous_scheme=args.viscous_scheme, penalty=args.penalty)
     first_y_plus = config['re_tau']*(1+float(model.s.z[0]))*float(model.s.widths[1][0])/2

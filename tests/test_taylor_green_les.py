@@ -6,7 +6,7 @@ import unittest
 import torch
 from fr.les import Smagorinsky, Vreman
 from case.taylor_green_vortex import TaylorGreenVortex
-from case.taylor_green_vertox_les import TaylorGreenVortexLES, run
+from case.taylor_green_vortex_les import TaylorGreenVortexLES, run
 
 
 class TaylorGreenLESTests(unittest.TestCase):
