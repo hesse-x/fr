@@ -9,7 +9,7 @@ import subprocess
 import sys
 
 
-def main():
+def main(*, runner_module=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, required=True)
     args, remaining = parser.parse_known_args()
@@ -19,7 +19,8 @@ def main():
     stamp = datetime.datetime.now().strftime('%Y%m%d-%H%M%S')
     path = out/f'run-{stamp}.log'
     command = [sys.executable, '-u', '-X', 'faulthandler',
-               str(Path(__file__).with_name('long_run.py')), '--output', str(out), *remaining]
+               *(['-m', runner_module] if runner_module else [str(Path(__file__).with_name('long_run.py'))]),
+               '--output', str(out), *remaining]
     with path.open('a', buffering=1) as log:
         child = subprocess.Popen(command, cwd=root, stdin=subprocess.DEVNULL,
                                  stdout=log, stderr=subprocess.STDOUT)

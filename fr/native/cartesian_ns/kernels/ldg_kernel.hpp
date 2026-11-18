@@ -71,7 +71,7 @@ inline void group(const double* input,const double* convection,double* output,in
                         // Diagonal velocity derivatives enter every stress trace;
                         // off-diagonals enter row/column directions, dT only its row.
                         int mask=c==3 ? (1<<axis) : (axis==c ? 7 : (1<<axis)|(1<<c));
-#if FR_NS_VREMAN || FR_NS_SMAGORINSKY
+#if FR_NS_VREMAN || FR_NS_SMAGORINSKY || FR_NS_WALE
                         if(c==3 && (ScanOnly || !(needed[e]&mask))) continue;
 #else
                         if(!(needed[e]&mask)) continue;
@@ -109,7 +109,7 @@ inline void group(const double* input,const double* convection,double* output,in
                     // Diagonal velocity derivatives enter every stress trace;
                     // off-diagonals enter row/column directions, dT only its row.
                     int mask=c==3 ? (1<<axis) : (axis==c ? 7 : (1<<axis)|(1<<c));
-#if FR_NS_VREMAN || FR_NS_SMAGORINSKY
+#if FR_NS_VREMAN || FR_NS_SMAGORINSKY || FR_NS_WALE
                         if(c==3 && (ScanOnly || !(needed[e]&mask))) continue;
 #else
                         if(!(needed[e]&mask)) continue;
@@ -136,7 +136,7 @@ inline void group(const double* input,const double* convection,double* output,in
             }
 #endif
             if(timing) { gradient_total+=fr_parallel::wall_time()-t; t=fr_parallel::wall_time(); }
-#if FR_NS_VREMAN || FR_NS_SMAGORINSKY
+#if FR_NS_VREMAN || FR_NS_SMAGORINSKY || FR_NS_WALE
             if constexpr(ScanOnly) {
                 double maximum=1.;
                 const double molecular_pr=mu*gamma/((gamma-1)*kappa);
@@ -159,7 +159,7 @@ inline void group(const double* input,const double* convection,double* output,in
             }
 #endif
 
-#if FR_NS_VREMAN || FR_NS_SMAGORINSKY
+#if FR_NS_VREMAN || FR_NS_SMAGORINSKY || FR_NS_WALE
             // One constitutive evaluation per point; reuse for all three flux directions.
             for(int e=0;e<na;++e) {
                 int64_t old=primitive_ids[bs+e];
@@ -178,7 +178,7 @@ inline void group(const double* input,const double* convection,double* output,in
                     for(int n=0;n<N;n+=4) {
                         int at=e*N+n;
                         Vec effective_mu=mu, effective_kappa=kappa;
-#if FR_NS_VREMAN || FR_NS_SMAGORINSKY
+#if FR_NS_VREMAN || FR_NS_SMAGORINSKY || FR_NS_WALE
                         Vec mu_t=simd::load(sgs_mu+at);
                         effective_mu=effective_mu+mu_t;
                         effective_kappa=effective_kappa+mu_t*(gamma/(gamma-1)/sgs.turbulent_prandtl);

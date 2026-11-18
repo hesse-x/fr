@@ -9,14 +9,24 @@ import sys
 import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from channel import Channel
+from importlib import import_module
+Channel = import_module('case.channel-dns.channel').Channel
+from fr import CartesianMesh
 
 
-def wall_scales(model, profile):
-    """Wall shear from endpoint derivatives of the mean velocity polynomial."""
-    derivative = (profile[..., 1] @ model.s.D.T)*2/model.s.widths[1][:, None]
-    shear = model.mu*torch.stack((derivative[0] @ model.s.L,
-                                  -(derivative[-1] @ model.s.R)))
+def wall_scales(model, profile, method='polynomial'):
+    """Molecular wall shear from polynomial derivatives or a no-slip secant."""
+    if method == 'polynomial':
+        derivative = (profile[..., 1] @ model.s.D.T)*2/model.s.widths[1][:, None]
+        shear = model.mu*torch.stack((derivative[0] @ model.s.L,
+                                      -(derivative[-1] @ model.s.R)))
+    elif method == 'first-point':
+        y = model.s.coords[1][0, :, 0, 0, :, 0]
+        distance = torch.stack((1+y[0, 0], 1-y[-1, -1]))
+        velocity = torch.stack((profile[0, 0, 1], profile[-1, -1, 1]))
+        shear = model.mu*velocity/distance
+    else:
+        raise ValueError('wall shear method must be polynomial or first-point')
     density = torch.stack((profile[0, :, 0] @ model.s.L,
                            profile[-1, :, 0] @ model.s.R))
     if not bool((shear > 0).all() and (density > 0).all()):
@@ -37,22 +47,25 @@ def main():
     parser.add_argument('checkpoint', type=Path)
     parser.add_argument('--output', type=Path)
     parser.add_argument('--threads', type=int, default=2)
+    parser.add_argument('--wall-shear-method', choices=('polynomial', 'first-point'), default='polynomial')
     args = parser.parse_args()
     torch.set_num_threads(args.threads)
     saved = torch.load(args.checkpoint, map_location='cpu', weights_only=False)
     duration = saved['sample_duration']
     if duration <= 0:
-        parser.error('checkpoint has no accumulated mean field')
+        print('checkpoint has no accumulated mean field; skipping mean-field export')
+        return
     config = saved['config']
     model = Channel(tuple(config['cells']), p=config['p'], stretch=config['stretch'],
                     re_tau=config['re_tau'], mach=config['mach'],
                     lengths=config.get('lengths', (2*math.pi, math.pi)),
-                    bulk_velocity=config.get('bulk_velocity', 15.))
+                    bulk_velocity=config.get('bulk_velocity', 15.),
+                    mesh=CartesianMesh(config['mesh_edges']) if 'mesh_edges' in config else None)
     out = args.output or args.checkpoint.parent/'postprocess'
     out.mkdir(parents=True, exist_ok=True)
     field = saved['field_integral']/duration
     profile = model.plane_mean(field)
-    shear, density, friction = wall_scales(model, profile)
+    shear, density, friction = wall_scales(model, profile, args.wall_shear_method)
     y = model.s.coords[1][0, :, 0, 0, :, 0]
     velocity = profile[..., 1:4]
     pairs = ((0, 0), (1, 1), (2, 2), (0, 1), (0, 2), (1, 2))
@@ -92,7 +105,10 @@ def main():
                    u_tau=friction.tolist(),
                    re_tau=(friction*density/model.mu).tolist(),
                    wall_order=['lower', 'upper'],
-                   wall_shear_method='mu times endpoint derivative of plane/time mean velocity polynomial',
+                   wall_shear_method=('mu times endpoint derivative of plane/time mean velocity polynomial'
+                       if args.wall_shear_method == 'polynomial' else
+                       'mu times first Gauss-point plane/time mean velocity divided by wall distance; U_wall=0'),
+                   wall_shear_estimator=args.wall_shear_method,
                    averaging='Reynolds plane/time mean; separate walls, no symmetry assumption',
                    statistical_convergence_verified=False)
     (out/'metrics.json').write_text(json.dumps(metrics, indent=2)+'\n')

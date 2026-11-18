@@ -30,7 +30,7 @@ extern "C" void grouped_ldg(
     });
 }
 
-#if FR_NS_VREMAN || FR_NS_SMAGORINSKY
+#if FR_NS_VREMAN || FR_NS_SMAGORINSKY || FR_NS_WALE
 // Reuse the exact LDG primal gradient; no global primitive/gradient fields.
 extern "C" double grouped_sgs_ratio(
     const double* input,int64_t elements,const int64_t* offsets,const int64_t* primitive_ids,

@@ -87,3 +87,66 @@ class Vreman(EddyViscosity):
                 for i, j in ((0, 1), (0, 2), (1, 2)))
         denominator = torch.where(norm2 > 0, norm2, torch.ones_like(norm2))
         return density*self.cv*delta**2*(b/denominator).sqrt()
+
+
+class WALE(EddyViscosity):
+    """Nicoud–Ducros WALE, using the traceless symmetric square of grad(u)."""
+    def __init__(self, cw=.5, turbulent_prandtl=.9):
+        super().__init__(turbulent_prandtl)
+        if not math.isfinite(cw) or cw < 0:
+            raise ValueError('finite nonnegative WALE coefficient required')
+        self.cw = cw
+
+    def viscosity(self, density, gradient, delta):
+        du = gradient[..., :3, :]
+        strain = .5*(du+du.transpose(-1, -2))
+        square = du @ du
+        trace = square.diagonal(dim1=-2, dim2=-1).sum(-1)
+        sd = .5*(square+square.transpose(-1, -2))-trace[..., None, None]/3*torch.eye(
+            3, dtype=gradient.dtype, device=gradient.device)
+        s2 = strain.square().sum((-1, -2))
+        d2 = sd.square().sum((-1, -2))
+        denominator = s2.pow(2.5)+d2.pow(1.25)
+        safe = torch.where(denominator > 0, denominator, torch.ones_like(denominator))
+        return density*(self.cw*delta)**2*d2.pow(1.5)/safe
+
+
+_cartesian_filter_width = filter_width
+
+
+class CartesianLESMixin:
+    """SGS configuration, viscous flux and explicit stability bound for Cartesian NS."""
+    def __init__(self, *args, sgs_model='vreman', cv=.07, cs=.1, cw=.5, filter_ratio=1.,
+                 turbulent_prandtl=.9, filter_width='dof', **kwargs):
+        if sgs_model not in ('none', 'vreman', 'smagorinsky', 'wale'):
+            raise ValueError('SGS model must be none, vreman, smagorinsky or wale')
+        self.sgs_model = sgs_model
+        self.sgs = {'wale': lambda: WALE(cw, turbulent_prandtl),
+                    'vreman': lambda: Vreman(cv, turbulent_prandtl),
+                    'smagorinsky': lambda: Smagorinsky(cs, turbulent_prandtl),
+                    'none': lambda: None}[sgs_model]()
+        if not math.isfinite(filter_ratio) or filter_ratio <= 0:
+            raise ValueError('positive finite filter_ratio required')
+        self.filter_ratio = filter_ratio
+        if kwargs.get('viscous_scheme', 'ldg') != 'ldg':
+            raise ValueError('LES currently requires ldg')
+        super().__init__(*args, **kwargs)
+        self.filter_width = filter_width
+        self.sgs_filter_scale = filter_ratio*filter_width_scale(self.s, filter_width)
+        self.delta = filter_ratio*_cartesian_filter_width(self.s, filter_width)
+
+    def viscous_flux(self, U, t=0.):
+        if self.sgs is None:
+            return super().viscous_flux(U, t)
+        gradient = self.viscous_operator.gradient(self.primitive(U), t)
+        return self.eq.viscous_flux(U, gradient)+self.sgs.flux(self.eq, U, gradient, self.delta)
+
+    def timestep(self, U, cfl=.1):
+        if self.sgs is None:
+            return super().timestep(U, cfl)
+        gradient = self.viscous_operator.gradient(self.primitive(U))
+        mu_t = self.sgs.viscosity(U[..., 0], gradient, self.delta)
+        # Conservative global coefficient bound, including SGS thermal diffusion.
+        ratio = max(float((1+mu_t/self.mu).max()),
+                    float((1+mu_t/self.mu*self.eq.prandtl/self.sgs.turbulent_prandtl).max()))
+        return self.eq.timestep(self.s, U, cfl, viscous_factor=ratio)

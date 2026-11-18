@@ -167,6 +167,10 @@ class NativeLocalRKStepper(NativeFluxStepper):
             raise ValueError('native plan and stepper must share the same NS model')
         super().__init__(model, None, constant_mass_flux=constant_mass_flux)
         self.plan = plan
+        self.modal_filter = None
+        if getattr(model, 'modal_filter', None) is not None:
+            from .modal_filter import NativeCartesianModalFilter
+            self.modal_filter = NativeCartesianModalFilter(model)
         self.pending = torch.empty((2, *model.s.shape), dtype=torch.float64).movedim(0, -1)
 
     def advance(self, state, t, dt):
@@ -179,6 +183,8 @@ class NativeLocalRKStepper(NativeFluxStepper):
             self.last_force = self._force(self.pending)
             self.library.flux_rk_finalize(original.data_ptr(), stage.data_ptr(), self.pending.data_ptr(),
                 output.data_ptr(), self.count, self.last_force, coefficient, int(combined))
+            if self.modal_filter is not None:
+                self.modal_filter.apply(output)
             stage = output
         return stage
 
@@ -196,6 +202,14 @@ class NativeLocalRKStepper(NativeFluxStepper):
                 or tuple(integral.shape) != self.model.s.shape+(12,)
                 or not integral.movedim(-1, 0).is_contiguous()):
             raise ValueError('expected matching SoA time integral')
+        if self.modal_filter is not None:
+            # Filtering changes the final state: validate/CFL and trapezoidal
+            # moments must use the filtered output rather than the fused scan.
+            output = self.advance(state, t, dt)
+            valid, next_dt = self.scan(output, cfl)
+            if valid and integral is not None:
+                NativeMeanAccumulator(self.model).add(integral, state, output, dt)
+            return output, valid, next_dt
         original, stage = state, state
         stages = ssprk43_stages(t, dt)
         for index, (_, coefficient, combined) in enumerate(stages):

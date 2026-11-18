@@ -24,12 +24,12 @@ def compiler_flags(boundary_mode='separate', viscous_config=None, sgs=None, inte
     if viscous_config is not None and viscous_config.scheme == 'br1-penalty':
         viscous_flags += ['-DFR_NS_BR1=1', '-DFR_NS_PENALTY='+repr(float(viscous_config.penalty))]
     if sgs is not None:
-        from fr.les import Vreman, Smagorinsky
-        if type(sgs) not in (Vreman, Smagorinsky):
-            raise ValueError('native-p3 SGS requires Vreman or Smagorinsky')
+        from fr.les import Vreman, Smagorinsky, WALE
+        if type(sgs) not in (Vreman, Smagorinsky, WALE):
+            raise ValueError('native-p3 SGS requires Vreman, Smagorinsky or WALE')
         if viscous_config is None or viscous_config.scheme != 'ldg':
             raise ValueError('native-p3 SGS requires LDG')
-        viscous_flags += ['-DFR_NS_VREMAN=1' if type(sgs) is Vreman else '-DFR_NS_SMAGORINSKY=1']
+        viscous_flags += ['-DFR_NS_VREMAN=1' if type(sgs) is Vreman else '-DFR_NS_SMAGORINSKY=1' if type(sgs) is Smagorinsky else '-DFR_NS_WALE=1']
     return viscous_flags+['-DFR_NS_SPLIT_BOUNDARY='+mode, '-O3', '-std=c++17', '-march=native', '-fopenmp', '-ffp-contract=fast',
             '-fno-math-errno', '-shared', '-fPIC'] + aten_compile_flags()
 

@@ -2,7 +2,7 @@
 #include "avx2.hpp"
 
 namespace fr_sgs {
-enum class Model { None, Vreman, Smagorinsky };
+enum class Model { None, Vreman, Smagorinsky, WALE };
 struct Config {
     double coefficient=0.;
     double turbulent_prandtl=.9;
@@ -12,6 +12,8 @@ struct Config {
 inline constexpr Model compiled_model=Model::Vreman;
 #elif FR_NS_SMAGORINSKY
 inline constexpr Model compiled_model=Model::Smagorinsky;
+#elif FR_NS_WALE
+inline constexpr Model compiled_model=Model::WALE;
 #else
 inline constexpr Model compiled_model=Model::None;
 #endif
@@ -38,6 +40,24 @@ inline simd::Vec viscosity(const double* gradient,int gs,int at,double delta,
                 magnitude2=magnitude2+2.*strain*strain;
             }
             return rho*(config.coefficient*config.coefficient*delta*delta)*simd::sqrt(magnitude2);
+        }
+        if constexpr(model==Model::WALE) {
+            Vec square[3][3],s2=0.,d2=0.;
+            for(int i=0;i<3;++i) for(int j=0;j<3;++j) {
+                square[i][j]=Vec(0.);
+                for(int k=0;k<3;++k) square[i][j]=square[i][j]+a[i][k]*a[k][j];
+            }
+            Vec trace=(square[0][0]+square[1][1]+square[2][2])/3.;
+            for(int i=0;i<3;++i) for(int j=0;j<3;++j) {
+                Vec strain=(a[i][j]+a[j][i])*.5;
+                Vec sd=(square[i][j]+square[j][i])*.5;
+                if(i==j) sd=sd-trace;
+                s2=s2+strain*strain;
+                d2=d2+sd*sd;
+            }
+            Vec denominator=s2*s2*simd::sqrt(s2)+d2*simd::sqrt(simd::sqrt(d2));
+            return rho*(config.coefficient*config.coefficient*delta*delta)
+                *d2*simd::sqrt(d2)/simd::maximum(denominator,Vec(1e-300));
         }
         Vec b=0.;
         for(int i=0;i<3;++i) for(int j=i+1;j<3;++j) for(int d=0;d<3;++d) {

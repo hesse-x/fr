@@ -39,6 +39,7 @@ pip install -r requirements.txt
 | [case/naca0012-euler/](case/naca0012-euler/) | NACA0012无黏Euler绕流，结构四边形、native、体/面过积分及1°载荷结果 | [README](case/naca0012-euler/README.md) |
 | [case/naca0012-ns/](case/naca0012-ns/) | NACA0012层流NS绕流，结构四边形、无滑移绝热壁及1°的CL/CD、Cp/Cf分布 | [README](case/naca0012-ns/README.md) |
 | [case/cylinder_flow/](case/cylinder_flow/) | 二维圆柱层流绕流，默认 Re=100 非定常计算 | [README](case/cylinder_flow/README.md) |
+| [case/channel-les/](case/channel-les/) | 恒质量流量三维槽道 WALE LES，含20～25万步时均 y⁺–U⁺ 与参考对照 | [README](case/channel-les/README.md) |
 | [case/channel-dns/](case/channel-dns/) | 恒质量流量三维槽道湍流、扰动发展及平均场统计 | [README](case/channel-dns/README.md) |
 | [case/taylor_green_vortex/](case/taylor_green_vortex/) | 三向周期 NS 涡衰减，公共 native-p3、Ma=0.3及公开高分辨率参考对照；Ma=0.1/0.3均完成，含完整统计曲线及Mach数敏感性对照 | [README](case/taylor_green_vortex/README.md) |
 | [case/taylor_green_vortex_les/](case/taylor_green_vortex_les/) | Taylor–Green 涡显式 Vreman LES，默认 32³ 单元，native-p3/Torch、LDG，含亚格子耗散统计及网格验证说明 | [README](case/taylor_green_vortex_les/README.md) |
@@ -60,4 +61,4 @@ python -m unittest discover -s tests -v
 
 算例专用测试见各自README。性能数据、误差表和图像均在对应算例目录中说明，不在此处重复。
 
-三维 channel-dns 与 Taylor–Green DNS/LES 算例附带 `mesh/default.json` 结构化网格和 `generate_mesh.py` 生成脚本，命令行通过 `--mesh` 指定文件，由框架 `CartesianMesh` 统一读取。详见各算例 README。
+三维 channel-dns/channel-les 与 Taylor–Green DNS/LES 算例附带 `mesh/default.json` 结构化网格和 `generate_mesh.py` 生成脚本，命令行通过 `--mesh` 指定文件，由框架 `CartesianMesh` 统一读取。详见各算例 README。

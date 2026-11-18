@@ -129,6 +129,17 @@ class CartesianNavierStokes:
             from .time import ssprk43
             from .sources import ConstantMassFlux
             rhs = ConstantMassFlux(self, self.rhs) if constant_mass_flux else self.rhs
+            modal_filter = getattr(self, 'modal_filter', None)
+            if modal_filter is not None:
+                from .time import ssprk43_stages
+                def filtered_step(U, t, dt):
+                    original, stage = U, U
+                    for stage_time, coefficient, combined in ssprk43_stages(t, dt):
+                        residual = rhs(stage, stage_time)
+                        output = (2/3*original+1/3*stage if combined else stage)+coefficient*residual
+                        stage = modal_filter.apply(output)[0]
+                    return stage
+                return filtered_step
             return lambda U, t, dt: ssprk43(rhs, U, t, dt)
         from .native.cartesian_ns import GroupedFused, NativeLocalRKStepper
         plan = GroupedFused(self, block, boundary_mode=boundary_mode)

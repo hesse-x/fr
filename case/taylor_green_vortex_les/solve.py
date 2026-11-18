@@ -3,46 +3,13 @@ import argparse
 import math
 from pathlib import Path
 import torch
-from fr.les import Vreman, Smagorinsky, filter_width as sgs_width, filter_width_scale
+from fr.les import CartesianLESMixin
 from case.taylor_green_vortex.solve import TaylorGreenVortex, run as run_tgv
 
 
-class TaylorGreenVortexLES(TaylorGreenVortex):
-    def __init__(self, cells=(32, 32, 32), p=3, *, sgs_model='vreman', cv=.07, cs=.1, filter_ratio=1.,
-                 turbulent_prandtl=.9, interface_flux='rusanov', anti_alias='none',
-                 quadrature_order=None, filter_width='dof', **kwargs):
-        if sgs_model not in ('none', 'vreman', 'smagorinsky'):
-            raise ValueError('SGS model must be none, vreman or smagorinsky')
-        self.sgs_model = sgs_model
-        self.sgs = {'vreman': lambda: Vreman(cv, turbulent_prandtl),
-                    'smagorinsky': lambda: Smagorinsky(cs, turbulent_prandtl),
-                    'none': lambda: None}[sgs_model]()
-        if not math.isfinite(filter_ratio) or filter_ratio <= 0:
-            raise ValueError('positive finite filter_ratio required')
-        self.filter_ratio = filter_ratio
-        if kwargs.get('viscous_scheme', 'ldg') != 'ldg':
-            raise ValueError('LES currently requires ldg')
-        super().__init__(cells, p, interface_flux=interface_flux, anti_alias=anti_alias,
-                         quadrature_order=quadrature_order, **kwargs)
-        self.filter_width = filter_width
-        self.sgs_filter_scale = filter_ratio*filter_width_scale(self.s, filter_width)
-        self.delta = filter_ratio*sgs_width(self.s, filter_width)
-
-    def viscous_flux(self, U, t=0.):
-        if self.sgs is None:
-            return super().viscous_flux(U, t)
-        gradient = self.viscous_operator.gradient(self.primitive(U), t)
-        return self.eq.viscous_flux(U, gradient)+self.sgs.flux(self.eq, U, gradient, self.delta)
-
-    def timestep(self, U, cfl=.1):
-        if self.sgs is None:
-            return super().timestep(U, cfl)
-        gradient = self.viscous_operator.gradient(self.primitive(U))
-        mu_t = self.sgs.viscosity(U[..., 0], gradient, self.delta)
-        # Conservative global coefficient bound, including SGS thermal diffusion.
-        ratio = max(float((1+mu_t/self.mu).max()),
-                    float((1+mu_t/self.mu*self.eq.prandtl/self.sgs.turbulent_prandtl).max()))
-        return self.eq.timestep(self.s, U, cfl, viscous_factor=ratio)
+class TaylorGreenVortexLES(CartesianLESMixin, TaylorGreenVortex):
+    def __init__(self, cells=(32, 32, 32), p=3, **kwargs):
+        super().__init__(cells, p, **kwargs)
 
     def diagnostics(self, U, t=0., *, rhs=None):
         result = super().diagnostics(U, t, rhs=rhs)

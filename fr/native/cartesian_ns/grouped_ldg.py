@@ -56,7 +56,7 @@ class GroupedViscous:
         self.count = nx*ny*nz
         sgs = getattr(model, 'sgs', None)
         self.constants = (model.eq.gamma, model.mu, model.kappa, model.temperature, model.forcing,
-                          getattr(sgs, 'cv', getattr(sgs, 'cs', 0.)),
+                          getattr(sgs, 'cv', getattr(sgs, 'cs', getattr(sgs, 'cw', 0.))),
                           sgs.turbulent_prandtl if sgs is not None else .9,
                           getattr(model, 'sgs_filter_scale', 1.))
         self.library = load_library(boundary_mode, model.viscous_config, getattr(model, 'sgs', None))

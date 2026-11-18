@@ -27,7 +27,7 @@ class Channel(CartesianNavierStokes):
         self.lengths = tuple(lengths)
         eta = torch.linspace(-1., 1., cells[1]+1, dtype=torch.float64, device=device)
         y_edges = torch.tanh(stretch*eta)/math.tanh(stretch) if stretch else eta
-        edges = (None, y_edges, None) if mesh is None else CartesianMesh.read(mesh).require(
+        edges = (None, y_edges, None) if mesh is None else (mesh if isinstance(mesh, CartesianMesh) else CartesianMesh.read(mesh)).require(
             cells, ((0., lengths[0]), (-1., 1.), (0., lengths[1])))
         super().__init__(cells, ((0., lengths[0]), (-1., 1.), (0., lengths[1])), p,
                          mu=1/re_tau, wall_temperature=temperature, forcing=forcing,

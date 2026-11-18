@@ -39,7 +39,7 @@ def main():
         writer.writerow(('wall', 'y_plus', 'u_plus', 'mkm_u_plus', 'difference'))
         writer.writerows(comparisons)
     summary = dict(sample_start_step=metrics['sample_start_step'], end_step=metrics['step'],
-                   nominal_mach=mach,
+                   nominal_mach=mach, wall_shear_method=metrics.get('wall_shear_method'),
                    simulation_re_tau=metrics['re_tau'], reference_re_tau=178.12,
                    reference_file=str(reference_path.resolve()),
                    comparison='same y+, separate actual wall scales; different Re_tau and Mach number',
@@ -69,7 +69,9 @@ def main():
     residual.legend(fontsize=9)
     for axis in (ax, residual):
         axis.grid(True, which='both', alpha=.25)
-    fig.suptitle(f'Mean over steps {metrics["sample_start_step"]:,}–{metrics["step"]:,}; nominal Ma={mach:g}', fontsize=11)
+    method_label = ('Wall shear: first-point U1/y1, Uwall=0'
+                    if metrics.get('wall_shear_estimator') == 'first-point' else 'Wall shear: polynomial endpoint derivative')
+    fig.suptitle(f'Mean over steps {metrics["sample_start_step"]:,}–{metrics["step"]:,}; nominal Ma={mach:g}\n{method_label}', fontsize=11)
     fig.tight_layout()
     for extension in ('png', 'pdf'):
         fig.savefig(out/f'u_plus_mkm_comparison.{extension}', dpi=200)
