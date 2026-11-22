@@ -141,10 +141,10 @@ class CartesianLESMixin:
         gradient = self.viscous_operator.gradient(self.primitive(U), t)
         return self.eq.viscous_flux(U, gradient)+self.sgs.flux(self.eq, U, gradient, self.delta)
 
-    def timestep(self, U, cfl=.1):
+    def timestep(self, U, cfl=.1, *, t=0.):
         if self.sgs is None:
             return super().timestep(U, cfl)
-        gradient = self.viscous_operator.gradient(self.primitive(U))
+        gradient = self.viscous_operator.gradient(self.primitive(U), t)
         mu_t = self.sgs.viscosity(U[..., 0], gradient, self.delta)
         # Conservative global coefficient bound, including SGS thermal diffusion.
         ratio = max(float((1+mu_t/self.mu).max()),

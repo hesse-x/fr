@@ -35,7 +35,7 @@ def load_library(boundary_mode='separate', interface_flux='rusanov', anti_alias=
     library = ctypes.CDLL(str(target))
     p = ctypes.c_void_p
     library.grouped_convection.argtypes = [p, p, ctypes.c_int64]+[p]*14+[
-        ctypes.c_double, ctypes.c_int, ctypes.c_int, ctypes.c_int, p]
+        ctypes.c_double, ctypes.c_int, ctypes.c_int, ctypes.c_int, p, p, ctypes.c_double]
     library.grouped_convection.restype = None
     library.build_directory = str(build)
     _LIBRARIES[key] = library
@@ -59,6 +59,8 @@ class GroupedConvection:
         nx, ny, nz = self.cells
         self.count = nx*ny*nz
         self.gamma = model.eq.gamma
+        self.jet = model.native_round_jet_data() if model.boundary_preset == 'open' else None
+        self.jet_pointer = self.jet.data_ptr() if self.jet is not None else None
         self.library = load_library(boundary_mode, getattr(model, 'interface_flux', 'rusanov'), model.s.anti_alias, model.s.quadrature_order)
         self.group_offsets, self.face_offsets = [0], [0]
         owned, faces, cell_faces = [], [], []
@@ -108,7 +110,8 @@ class GroupedConvection:
                         model.s.interpolation.contiguous() if model.s.anti_alias else model.s.z.new_empty(0),
                         model.s.projection.contiguous() if model.s.anti_alias else model.s.z.new_empty(0)]
         face_state_slots = 10*16 if locality_options()['face_local'] else 10*self.max_faces*16
-        self.scratch_bytes_per_worker = 8*((29 if 'flux' in model.s.anti_alias else 19)*self.max_cells*64+face_state_slots+5*self.max_faces*16)
+        volume_fields = 29 if 'flux' in model.s.anti_alias else 14
+        self.scratch_bytes_per_worker = 8*(volume_fields*self.max_cells*64+face_state_slots+5*self.max_faces*16)
         self.metadata = dict(interface_flux=getattr(model, 'interface_flux', 'rusanov'), block=list(block), groups=self.groups,
                              max_cells=self.max_cells, max_interfaces=self.max_faces,
                              anti_alias=sorted(model.s.anti_alias), quadrature_order=model.s.quadrature_order,
@@ -116,9 +119,9 @@ class GroupedConvection:
                              packed_interfaces=len(faces), build_directory=self.library.build_directory)
 
     def __call__(self, state, t=0.):
-        return self.evaluate(state)
+        return self.evaluate(state, t=t)
 
-    def evaluate(self, state, *, profile=False):
+    def evaluate(self, state, *, profile=False, t=0.):
         if (state.device.type != 'cpu' or state.dtype != torch.float64 or
                 tuple(state.shape) != self.shape or not state.movedim(-1, 0).is_contiguous()):
             raise ValueError('expected Cartesian CPU float64 SoA state matching the plan')
@@ -126,7 +129,7 @@ class GroupedConvection:
         timing = (ctypes.c_double*4)() if profile else None
         self.library.grouped_convection(state.data_ptr(), output.data_ptr(), self.count,
             *(buffer.data_ptr() for buffer in self.buffers), self.gamma,
-            self.groups, self.max_cells, self.max_faces, timing)
+            self.groups, self.max_cells, self.max_faces, timing, self.jet_pointer, t)
         if profile:
             return output, dict(zip(('pack_and_face_traces', 'numerical_flux',
                                      'primitive_volume_and_lifting', 'scatter'), timing))

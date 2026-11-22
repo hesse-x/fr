@@ -21,16 +21,11 @@ inline constexpr int extra_fields=compiled_model==Model::None ? 0:1;
 // Model selection is specialized once per cached library, never per solution point.
 // Coefficients are runtime plan data; changing them does not trigger compilation.
 template<Model model>
-inline simd::Vec viscosity(const double* gradient,int gs,int at,double delta,
-                           simd::Vec rho,const Config& config) {
+inline simd::Vec tensor_viscosity(const simd::Vec a[3][3],double delta,
+                                  simd::Vec rho,const Config& config) {
     if constexpr(model==Model::None) return simd::Vec(0.);
     else {
         using simd::Vec;
-        Vec a[3][3],norm2=0.;
-        for(int c=0;c<3;++c) for(int d=0;d<3;++d) {
-            a[c][d]=simd::load(gradient+(d*4+c)*gs+at);
-            norm2=norm2+a[c][d]*a[c][d];
-        }
         if constexpr(model==Model::Smagorinsky) {
             Vec trace=(a[0][0]+a[1][1]+a[2][2])/3.;
             Vec magnitude2=0.;
@@ -59,13 +54,24 @@ inline simd::Vec viscosity(const double* gradient,int gs,int at,double delta,
             return rho*(config.coefficient*config.coefficient*delta*delta)
                 *d2*simd::sqrt(d2)/simd::maximum(denominator,Vec(1e-300));
         }
-        Vec b=0.;
+        Vec b=0.,norm2=0.;
+        for(int i=0;i<3;++i)for(int j=0;j<3;++j)norm2=norm2+a[i][j]*a[i][j];
         for(int i=0;i<3;++i) for(int j=i+1;j<3;++j) for(int d=0;d<3;++d) {
             int r=(d+1)%3,q=(d+2)%3;
             Vec cross=a[i][r]*a[j][q]-a[i][q]*a[j][r];
             b=b+cross*cross;
         }
         return rho*(config.coefficient*delta*delta)*simd::sqrt(b/simd::maximum(norm2,Vec(1e-300)));
+    }
+}
+template<Model model>
+inline simd::Vec viscosity(const double* gradient,int gs,int at,double delta,
+                           simd::Vec rho,const Config& config) {
+    if constexpr(model==Model::None) return simd::Vec(0.);
+    else {
+        simd::Vec a[3][3];
+        for(int c=0;c<3;++c)for(int d=0;d<3;++d)a[c][d]=simd::load(gradient+(d*4+c)*gs+at);
+        return tensor_viscosity<model>(a,delta,rho,config);
     }
 }
 }

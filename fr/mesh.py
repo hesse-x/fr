@@ -1,8 +1,7 @@
 """Conforming 2D mixed triangle/quad meshes; ASCII Gmsh 2.2 and 4.1 reader."""
 from dataclasses import dataclass
-from pathlib import Path
-import shlex
 import torch
+from .gmsh import read_ascii_mesh
 from .reference import Basis, gmsh_reference_nodes
 
 # Complete Lagrange elements; incomplete/serendipity elements are rejected.
@@ -144,67 +143,7 @@ class Mesh2D:
 
     @classmethod
     def read(cls,path):
-        raw=Path(path).read_bytes()
-        if b'$MeshFormat' not in raw: raise ValueError('missing Gmsh MeshFormat section')
-        header_lines=raw.split(b'$MeshFormat',1)[-1].splitlines()
-        if len(header_lines)<2: raise ValueError('incomplete Gmsh MeshFormat section')
-        header=header_lines[1].split()
-        if len(header)<2 or header[1]!=b'0': raise ValueError('only ASCII MSH files are supported; export with Mesh.Binary=0')
-        text=raw.decode('utf-8')
-        sections={}
-        lines=iter(text.splitlines())
-        for line in lines:
-            if line.startswith('$') and not line.startswith('$End'):
-                name=line[1:]
-                content=[]
-                for value in lines:
-                    if value==f'$End{name}': break
-                    content.append(value)
-                sections[name]=content
-        version=sections['MeshFormat'][0].split()[0]
-        names={}
-        for line in sections.get('PhysicalNames',[])[1:]:
-            dim,tag,name=shlex.split(line)
-            names[(int(dim),int(tag))]=name
-        nodes={}
-        elements=[]
-        if version=='2.2':
-            for line in sections['Nodes'][1:]:
-                tag,x,y,z=line.split()
-                nodes[int(tag)]=(float(x),float(y),float(z))
-            for line in sections['Elements'][1:]:
-                values=list(map(int,line.split()))
-                _,typ,ntags=values[:3]
-                physical=values[3] if ntags else 0
-                elements.append((typ,values[3+ntags:],physical))
-        elif version=='4.1':
-            entity_physical={}
-            entity_lines=iter(sections.get('Entities',[]))
-            counts=list(map(int,next(entity_lines,'0 0 0 0').split()))
-            for dim,count in enumerate(counts):
-                for _ in range(count):
-                    values=next(entity_lines).split()
-                    offset=4 if dim==0 else 7
-                    nphysical=int(values[offset])
-                    if nphysical>1: raise ValueError('multiple physical groups on one entity are ambiguous; use one tag per entity')
-                    entity_physical[(dim,int(values[0]))]=int(values[offset+1]) if nphysical else 0
-            tokens=iter(' '.join(sections['Nodes']).split())
-            nblocks,total,minimum,maximum=[int(next(tokens)) for _ in range(4)]
-            for _ in range(nblocks):
-                dim,entity,parametric,count=[int(next(tokens)) for _ in range(4)]
-                tags=[int(next(tokens)) for _ in range(count)]
-                for tag in tags:
-                    xyz=tuple(float(next(tokens)) for _ in range(3))
-                    for _ in range(dim if parametric else 0): next(tokens)
-                    nodes[tag]=xyz
-            iterator=iter(sections['Elements'])
-            nblocks,total,minimum,maximum=map(int,next(iterator).split())
-            for _ in range(nblocks):
-                dim,entity,typ,count=map(int,next(iterator).split())
-                for _ in range(count):
-                    values=list(map(int,next(iterator).split()))
-                    elements.append((typ,values[1:],entity_physical.get((dim,entity),0)))
-        else: raise ValueError('supported MSH versions are ASCII 2.2 and 4.1')
+        nodes,elements,names=read_ascii_mesh(path)
         if any(abs(z)>1e-12 for x,y,z in nodes.values()): raise ValueError('mesh must lie in the XY plane')
         ids={tag:i for i,tag in enumerate(nodes)}
         points=torch.tensor([(x,y) for x,y,z in nodes.values()],dtype=torch.float64)

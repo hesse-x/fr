@@ -115,7 +115,7 @@ class NativeFluxStepper:
                 or not state.movedim(-1, 0).is_contiguous()):
             raise ValueError('expected matching CPU float64 SoA state')
 
-    def scan(self, state, cfl):
+    def scan(self, state, cfl, *, t=0.):
         if not math.isfinite(cfl) or cfl <= 0:
             raise ValueError('positive finite CFL required')
         self.check(state)
@@ -125,19 +125,19 @@ class NativeFluxStepper:
         valid = bool(result[2])
         if not valid:
             return False, float('nan')
-        dt = min(cfl/((2*self.model.s.p+1)*result[1]), cfl*result[0]/(self.diffusion_factor*self._diffusion_ratio(state)))
+        dt = min(cfl/((2*self.model.s.p+1)*result[1]), cfl*result[0]/(self.diffusion_factor*self._diffusion_ratio(state, t)))
         return True, dt
 
-    def _diffusion_ratio(self, state):
+    def _diffusion_ratio(self, state, t=0.):
         if getattr(self.model, 'sgs', None) is None:
             return 1.
         plan = getattr(self, 'plan', None)
         if plan is not None:
-            return plan.viscous.diffusion_ratio(state)
+            return plan.viscous.diffusion_ratio(state, t)
         if not hasattr(self, '_sgs_viscous'):
             from .grouped_ldg import GroupedViscous
             self._sgs_viscous = GroupedViscous(self.model)
-        return self._sgs_viscous.diffusion_ratio(state)
+        return self._sgs_viscous.diffusion_ratio(state, t)
 
     def advance(self, state, t, dt):
         self._check_time(t, dt)
@@ -172,14 +172,33 @@ class NativeLocalRKStepper(NativeFluxStepper):
             from .modal_filter import NativeCartesianModalFilter
             self.modal_filter = NativeCartesianModalFilter(model)
         self.pending = torch.empty((2, *model.s.shape), dtype=torch.float64).movedim(0, -1)
+        self._stages = None
 
-    def advance(self, state, t, dt):
+    @staticmethod
+    def _overlaps(left, right):
+        a, b = left.data_ptr(), right.data_ptr()
+        return a < b+right.numel()*right.element_size() and b < a+left.numel()*left.element_size()
+
+    def _buffers(self, state, out):
+        if out is None:
+            out = torch.empty_like(state)
+        else:
+            self.check(out)
+            if self._overlaps(out, state):
+                raise ValueError('RK output must not overlap the input state')
+        if self._stages is None:
+            self._stages = (torch.empty_like(state), torch.empty_like(state))
+        # The third stage reads both the step input and stage two.
+        a, b = self._stages
+        return a, b, a, out
+
+    def advance(self, state, t, dt, *, out=None):
+        """Return an independent full-step state unless a distinct output is supplied."""
         self._check_time(t, dt)
         self.check(state)
         original, stage = state, state
-        for _, coefficient, combined in ssprk43_stages(t, dt):
-            output = torch.empty_strided(stage.shape, stage.stride(), dtype=stage.dtype)
-            self.plan.rk_stage(original, stage, output, self.pending, coefficient, combined)
+        for (stage_time, coefficient, combined), output in zip(ssprk43_stages(t, dt), self._buffers(state, out)):
+            self.plan.rk_stage(original, stage, output, self.pending, coefficient, combined, stage_time)
             self.last_force = self._force(self.pending)
             self.library.flux_rk_finalize(original.data_ptr(), stage.data_ptr(), self.pending.data_ptr(),
                 output.data_ptr(), self.count, self.last_force, coefficient, int(combined))
@@ -188,11 +207,13 @@ class NativeLocalRKStepper(NativeFluxStepper):
             stage = output
         return stage
 
-    def advance_finish(self, state, t, dt, cfl, integral=None):
+    def advance_finish(self, state, t, dt, cfl, integral=None, *, out=None):
         """Fuse final source update, validity, next CFL and optional moments.
 
         On invalid return discard the step: an in-place integral may be partly
         updated. The production caller raises before committing any checkpoint.
+        An explicit out buffer is overwritten; it must be disjoint from state
+        and integral. With no out, callers can retain any returned state.
         """
         self._check_time(t, dt)
         if not math.isfinite(cfl) or cfl <= 0:
@@ -202,19 +223,20 @@ class NativeLocalRKStepper(NativeFluxStepper):
                 or tuple(integral.shape) != self.model.s.shape+(12,)
                 or not integral.movedim(-1, 0).is_contiguous()):
             raise ValueError('expected matching SoA time integral')
+        if out is not None and integral is not None and self._overlaps(out, integral):
+            raise ValueError('RK output must not overlap the time integral')
         if self.modal_filter is not None:
             # Filtering changes the final state: validate/CFL and trapezoidal
             # moments must use the filtered output rather than the fused scan.
-            output = self.advance(state, t, dt)
-            valid, next_dt = self.scan(output, cfl)
+            output = self.advance(state, t, dt, out=out)
+            valid, next_dt = self.scan(output, cfl, t=t+dt)
             if valid and integral is not None:
                 NativeMeanAccumulator(self.model).add(integral, state, output, dt)
             return output, valid, next_dt
         original, stage = state, state
-        stages = ssprk43_stages(t, dt)
-        for index, (_, coefficient, combined) in enumerate(stages):
-            output = torch.empty_strided(stage.shape, stage.stride(), dtype=stage.dtype)
-            self.plan.rk_stage(original, stage, output, self.pending, coefficient, combined)
+        stages = zip(ssprk43_stages(t, dt), self._buffers(state, out))
+        for index, ((stage_time, coefficient, combined), output) in enumerate(stages):
+            self.plan.rk_stage(original, stage, output, self.pending, coefficient, combined, stage_time)
             self.last_force = self._force(self.pending)
             if index == 3:
                 result = (ctypes.c_double*3)()
@@ -231,5 +253,5 @@ class NativeLocalRKStepper(NativeFluxStepper):
             stage = output
         if valid and getattr(self.model, 'sgs', None) is not None:
             next_dt = min(cfl/((2*self.model.s.p+1)*result[1]),
-                          cfl*result[0]/(self.diffusion_factor*self._diffusion_ratio(stage)))
+                          cfl*result[0]/(self.diffusion_factor*self._diffusion_ratio(stage, t+dt)))
         return stage, valid, next_dt

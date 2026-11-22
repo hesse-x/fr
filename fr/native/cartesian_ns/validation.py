@@ -8,6 +8,11 @@ def validate_model(model):
         raise ValueError('native-p3 requires three-dimensional CPU p=3 Cartesian NS')
     if not isinstance(model.eq, NavierStokes) or model.eq.dim != 3:
         raise ValueError('native-p3 requires the constant-property NavierStokes model')
+    if getattr(model, 'boundary_preset', None) == 'open':
+        if (s.periodic != (False, False, False) or model.viscous_scheme != 'ldg'
+                or 'surf-flux' in s.anti_alias or not callable(getattr(model, 'native_round_jet_data', None))):
+            raise ValueError('native-p3 open boundaries require a round jet, LDG and collocated face fluxes')
+        return
     expected = {'periodic': (True, True, True), 'isothermal-channel': (True, False, True)}
     if expected.get(getattr(model, 'boundary_preset', None)) != s.periodic:
         raise ValueError('native-p3 supports periodic or stationary isothermal y-wall presets')
