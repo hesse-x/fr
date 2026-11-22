@@ -7,11 +7,11 @@
 
 圆柱中心 `(0,0)`，直径 `D=1`。默认 `Re_D=100`、`Ma=0.1`、来流沿 +x，采用 NACA0012-NS 的二维可压缩层流 NS 离散：`gamma=1.4`、`Pr=0.72`、`rho_inf=c_inf=D=1`，因此 `U_inf=Ma`、`mu=Ma/Re_D`。CL/CD 以直径和动压归一化。
 
-## 三角网格结果
+## 结构网格结果
 
-![Re=100 二维圆柱绕流涡量动画，三角网格](vorticity_tri.gif)
+![Re=100 二维圆柱绕流涡量动画，结构网格](vorticity_structured.webp)
 
-上图为未压缩原始 GIF，文件位于本目录 [vorticity_tri.gif](vorticity_tri.gif)。使用 1,004 个三次曲边三角形、p=1、Re=100、Ma=0.2，150 帧覆盖对流时间 40–100。该粗网格用于演示，远尾迹分辨率有限；未施加跨单元平滑或降噪滤波。
+上图使用 7,760 个三次曲边四边形、p=1、Re=100、Ma=0.2。无损 WebP 的 120 帧覆盖对流时间 120–140，复现命令见下文「从旧解转到结构网格」。
 
 ## 运行三角网格算例
 
@@ -23,7 +23,7 @@
 venv/bin/python -m pip install -r requirements.txt
 ```
 
-先生成三角网格，再运行求解器。下面的参数用于复现上图；显式传入 `--kind tri` 和 `--mesh`，不依赖生成器及求解器的结构网格默认值。
+先生成三角网格，再运行求解器。下面的参数用于复现粗三角网格演示，显式传入 `--kind tri` 和 `--mesh`。
 
 ```bash
 venv/bin/python case/cylinder_flow/generate_mesh.py \
@@ -40,7 +40,7 @@ venv/bin/python case/cylinder_flow/solve.py \
   --output case/cylinder_flow/results/karman_p1_re100
 ```
 
-求解结束后，输出目录中会生成 `vorticity.gif`、`vorticity.png`、`vorticity_plot.json`、载荷/残差 CSV 和 `solution.pt` 检查点。求解器不会自动把 GIF 复制到本目录；本 README 中的 GIF 是单独保留的结果副本。
+求解结束后，输出目录中会生成 `vorticity.gif`、`vorticity.png`、`vorticity_plot.json`、载荷/残差 CSV 和 `solution.pt` 检查点。
 
 仅检查启动时，可将求解命令中的 `--max-steps` 改为 `20`，并加 `--no-plot`，同时换用独立输出目录。20 步只验证启动，不能观察到涡街。继续同一网格的计算时，在原求解参数上加 `--restart <输出目录>/solution.pt`，并提高 `--time` 和累计 `--max-steps` 上限；物理参数、网格、p、过积分参数和时间模式必须匹配。
 
@@ -57,7 +57,7 @@ venv/bin/python case/cylinder_flow/generate_mesh.py \
   --output case/cylinder_flow/results/mesh/refined_wake.msh
 ```
 
-求解时将 `--mesh` 换为新文件，并使用新的输出目录。原图中的 `--viscous-step-factor 64` 仅放宽显式扩散步长估计，不改变离散方程；换网格或阶数后需要重新检查 CFL 和数值稳定性。
+求解时将 `--mesh` 换为新文件，并使用新的输出目录。三角网格演示用 `--viscous-step-factor 64` 放宽显式扩散步长估计，换网格或阶数后需要重新检查 CFL 和数值稳定性。
 
 默认三次曲边四边形结构网格，输出 `results/mesh/structured.msh`。圆柱周围 4 个 O 型贴体块连接到 `[-2,2]²` 方框，外围 8 个矩形块覆盖 `[-10,20] × [-10,10]`。所有块共用边及节点，无悬挂面；水平 `|y/D|<2` 和竖直 `|x/D|<2` 构成十字加密区，四角逐渐放粗。流向细网格一直延伸到出口，避免脱落涡在 x/D=6 后立即进入粗网格。
 
@@ -113,7 +113,24 @@ venv/bin/python case/cylinder_flow/solve.py --mesh case/cylinder_flow/results/me
 
 同一新网格上的普通续算仍使用 `--restart`；原驱动的网格哈希检查保持有效，不能直接把旧网格检查点传给新网格求解器。结构网格的投影质量、时间步检查及最终结果见 `perf.md`。
 
-已完成结构网格计算至对流时间 140，最新 [120 帧结构网格 GIF](results/karman_structured_re100/vorticity.gif) 覆盖对流时间 120–140；另有[末时刻涡量图](results/karman_structured_re100/vorticity.png)。使用 Re=100、Ma=0.2、p=1、过积分参数 4，未增加跨单元平滑或降噪滤波。相较旧版，粗三角形痕迹消失，交替涡结构能持续传播到更远下游。后段测得 CL 约在 ±0.309 内振荡，周期约 6.09、St 约 0.164；这仍不是网格无关性结论。
+已完成结构网格计算至对流时间 140。[结构网格涡量动画](vorticity_structured.webp) 覆盖对流时间 120–140，另有[末时刻涡量图](results/karman_structured_re100/vorticity.png)。使用 Re=100、Ma=0.2、p=1、过积分参数 4，未增加跨单元平滑或降噪滤波。相较旧版，粗三角形痕迹消失，交替涡结构能持续传播到更远下游。后段测得 CL 约在 ±0.309 内振荡，周期约 6.09、St 约 0.164；这仍不是网格无关性结论。
+
+用求解器生成的 GIF 复现本页的无损动画：
+
+```bash
+venv/bin/python - <<'PY'
+from PIL import Image, ImageSequence
+
+with Image.open('case/cylinder_flow/results/karman_structured_re100/vorticity.gif') as gif:
+    frames = [frame.convert('RGBA') for frame in ImageSequence.Iterator(gif)]
+    durations = [frame.info['duration'] for frame in frames]
+    loop = gif.info['loop']
+
+frames[0].save('case/cylinder_flow/vorticity_structured.webp', save_all=True,
+               append_images=frames[1:], duration=durations, loop=loop,
+               lossless=True, method=6, minimize_size=True)
+PY
+```
 
 ```bash
 # 加密三角形圆周及尾迹

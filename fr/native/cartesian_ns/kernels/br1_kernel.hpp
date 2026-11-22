@@ -11,7 +11,8 @@ inline void group(const double* input,const double* convection,double* output,in
     const int64_t* offsets,const int64_t* primitive_ids,const int64_t* active_meta,const int64_t* owned_meta,
     const double* widths,const double* L,const double* R,const double* primal,const double* dual,
     const double* gl,const double* gr,double gamma,double mu,double kappa,double wall_temperature,
-    double forcing,double* scratch,double* timing,Output sink={},double* diffusion_ratio=nullptr,fr_sgs::Config sgs={}) {
+    double forcing,double* scratch,double* timing,Output sink={},double* diffusion_ratio=nullptr,
+    fr_sgs::Config sgs={},const double* =nullptr,double =0.) {
     const int g=group_id;
     int64_t os=offsets[g*3],as=offsets[g*3+1],bs=offsets[g*3+2];
     int no=offsets[(g+1)*3]-os,na=offsets[(g+1)*3+1]-as,nb=offsets[(g+1)*3+2]-bs;

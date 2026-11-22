@@ -8,7 +8,7 @@ from .equations.navier_stokes import NavierStokes
 
 
 class CartesianNavierStokes:
-    """3-D constant-property NS; periodic box or stationary isothermal y walls.
+    """3-D constant-property NS with periodic, channel, or callback boundaries.
 
     ``rhs`` is the independent Torch reference. ``make_stepper`` selects
     ``torch`` or the CPU FP64 SoA p=3 ``native-p3`` execution preset.
@@ -19,11 +19,19 @@ class CartesianNavierStokes:
     def __init__(self, cells, bounds, p=3, *, mu=1/1600, gamma=1.4, prandtl=.71,
                  boundary='periodic', wall_temperature=None, forcing=0.,
                  device='cpu', edges=None, anti_alias='none', quadrature_order=None,
-                 reference_state=None, viscous_scheme='ldg', penalty=4., interface_flux='rusanov'):
+                 reference_state=None, viscous_scheme='ldg', penalty=4., interface_flux='rusanov',
+                 inviscid_boundary=None, viscous_boundary=None):
         if len(cells) != 3:
             raise ValueError('CartesianNavierStokes requires a three-dimensional grid')
-        if boundary not in ('periodic', 'isothermal-channel'):
-            raise ValueError('boundary must be periodic or isothermal-channel')
+        presets = {'periodic': (True, True, True), 'isothermal-channel': (True, False, True),
+                   'open': (False, False, False)}
+        if boundary not in presets:
+            raise ValueError('boundary must be periodic, isothermal-channel or open')
+        if boundary == 'open':
+            if not callable(inviscid_boundary) or not callable(viscous_boundary):
+                raise ValueError('open boundaries require inviscid and viscous callbacks')
+        elif inviscid_boundary is not None or viscous_boundary is not None:
+            raise ValueError('boundary callbacks require the open preset')
         if boundary == 'isothermal-channel' and (wall_temperature is None or
                 not math.isfinite(wall_temperature) or wall_temperature <= 0):
             raise ValueError('isothermal-channel requires positive finite wall_temperature')
@@ -37,13 +45,14 @@ class CartesianNavierStokes:
         self.boundary_preset = boundary
         self.temperature = wall_temperature if wall_temperature is not None else 1.
         self.volume = math.prod(b-a for a, b in bounds)
-        periodic = (True, True, True) if boundary == 'periodic' else (True, False, True)
+        convection_boundary = inviscid_boundary if boundary == 'open' else self.wall
+        diffusion_boundary = viscous_boundary if boundary == 'open' else self.wall_primitive
         self.s = CartesianFR(cells, bounds, p, flux=self.eq.flux,
                              numerical_flux=make_numerical_flux(interface_flux, self.eq), speed=self.eq.speed,
-                             periodic=periodic, boundary=self.wall, device=device, edges=edges,
+                             periodic=presets[boundary], boundary=convection_boundary, device=device, edges=edges,
                              anti_alias=anti_alias, quadrature_order=quadrature_order)
         self.viscous_operator = make_viscous_operator(self.s, self.eq,
-            scheme=viscous_scheme, penalty=penalty, boundary=self.wall_primitive)
+            scheme=viscous_scheme, penalty=penalty, boundary=diffusion_boundary)
         self.viscous_config = self.viscous_operator.config
         self.viscous_scheme = self.viscous_config.scheme
         self.penalty = self.viscous_config.penalty
@@ -113,7 +122,7 @@ class CartesianNavierStokes:
         return self.eq.timestep(self.s, U, cfl, viscous_factor=self.viscous_config.timestep_factor)
 
     def make_stepper(self, preset='torch', *, constant_mass_flux=False,
-                     block=(4, 4, 4), boundary_mode='separate'):
+                     block=(4, 4, 4), boundary_mode='separate', group_packet=0):
         """Return callable advance(U,t,dt); forcing control is opt-in.
 
         Native also exposes scan/advance_finish and optional 12-field moments.
@@ -126,6 +135,8 @@ class CartesianNavierStokes:
         if boundary_mode not in ('separate', 'fused'):
             raise ValueError('boundary_mode must be separate or fused')
         if preset == 'torch':
+            if group_packet != 0:
+                raise ValueError('group packets require the native stepper')
             from .time import ssprk43
             from .sources import ConstantMassFlux
             rhs = ConstantMassFlux(self, self.rhs) if constant_mass_flux else self.rhs
@@ -142,7 +153,7 @@ class CartesianNavierStokes:
                 return filtered_step
             return lambda U, t, dt: ssprk43(rhs, U, t, dt)
         from .native.cartesian_ns import GroupedFused, NativeLocalRKStepper
-        plan = GroupedFused(self, block, boundary_mode=boundary_mode)
+        plan = GroupedFused(self, block, boundary_mode=boundary_mode, group_packet=group_packet)
         return NativeLocalRKStepper(self, plan, constant_mass_flux=constant_mass_flux)
 
     @staticmethod

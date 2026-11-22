@@ -9,7 +9,7 @@ extern "C" void grouped_ldg(
     const double* primal,const double* dual,const double* gl,const double* gr,
     double gamma,double mu,double kappa,double wall_temperature,double forcing,double sgs_coefficient,double sgs_prandtl,double sgs_filter_scale,
     int groups,int max_owned,int max_active,int max_primitive,
-    double* timing) {
+    double* timing,const double* jet,double time) {
     using namespace fr_viscous;
     if(timing) std::fill_n(timing,5,0.);
     std::mutex timing_mutex;
@@ -21,7 +21,7 @@ extern "C" void grouped_ldg(
             fr_viscous::group<false>(input,convection,output,elements,g,offsets,primitive_ids,
                 active_meta,owned_meta,widths,L,R,primal,dual,gl,gr,gamma,mu,kappa,
                 wall_temperature,forcing,scratch.data(),timing ? local:nullptr,{},nullptr,
-                {sgs_coefficient,sgs_prandtl,sgs_filter_scale});
+                {sgs_coefficient,sgs_prandtl,sgs_filter_scale},jet,time);
         }
         if(timing) {
             std::lock_guard<std::mutex> lock(timing_mutex);
@@ -37,7 +37,8 @@ extern "C" double grouped_sgs_ratio(
     const int64_t* active_meta,const int64_t* owned_meta,const double* widths,
     const double* L,const double* R,const double* primal,const double* dual,
     const double* gl,const double* gr,double gamma,double mu,double kappa,
-    double wall_temperature,double forcing,double sgs_coefficient,double sgs_prandtl,double sgs_filter_scale,int groups,int max_owned,int max_active,int max_primitive) {
+    double wall_temperature,double forcing,double sgs_coefficient,double sgs_prandtl,double sgs_filter_scale,
+    int groups,int max_owned,int max_active,int max_primitive,const double* jet,double time) {
     return at::parallel_reduce(0,groups,1,1.,[&](int64_t begin,int64_t end,double initial) {
         const int capacity=(4*max_primitive+(16+fr_sgs::extra_fields)*max_active+5*max_owned)*fr_ldg::N;
         auto& scratch=fr_scratch::buffer(capacity,1);
@@ -45,7 +46,8 @@ extern "C" double grouped_sgs_ratio(
             double ratio=1.;
             fr_ldg::group<false,fr_output::Raw,true>(input,nullptr,nullptr,elements,g,offsets,
                 primitive_ids,active_meta,owned_meta,widths,L,R,primal,dual,gl,gr,
-                gamma,mu,kappa,wall_temperature,forcing,scratch.data(),nullptr,{},&ratio,{sgs_coefficient,sgs_prandtl,sgs_filter_scale});
+                gamma,mu,kappa,wall_temperature,forcing,scratch.data(),nullptr,{},&ratio,
+                {sgs_coefficient,sgs_prandtl,sgs_filter_scale},jet,time);
             initial=std::max(initial,ratio);
         }
         return initial;

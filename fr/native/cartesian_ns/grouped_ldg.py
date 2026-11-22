@@ -31,10 +31,10 @@ def load_library(boundary_mode='separate', viscous_config=None, sgs=None):
     library = ctypes.CDLL(str(target))
     p = ctypes.c_void_p
     library.grouped_ldg.argtypes = [p, p, p, ctypes.c_int64]+[p]*11+[
-        ctypes.c_double]*8+[ctypes.c_int]*4+[p]
+        ctypes.c_double]*8+[ctypes.c_int]*4+[p, p, ctypes.c_double]
     library.grouped_ldg.restype = None
     if sgs is not None:
-        library.grouped_sgs_ratio.argtypes = [p, ctypes.c_int64]+[p]*11+[ctypes.c_double]*8+[ctypes.c_int]*4
+        library.grouped_sgs_ratio.argtypes = [p, ctypes.c_int64]+[p]*11+[ctypes.c_double]*8+[ctypes.c_int]*4+[p, ctypes.c_double]
         library.grouped_sgs_ratio.restype = ctypes.c_double
     library.build_directory = str(build)
     _LIBRARIES[key] = library
@@ -44,10 +44,9 @@ def load_library(boundary_mode='separate', viscous_config=None, sgs=None):
 class GroupedViscous:
     def __init__(self, model, block=(4, 2, 4), *, boundary_mode='separate'):
         validate_model(model)
-        if (model.s.p != 3 or model.s.z.device.type != 'cpu'
-                or model.s.dim != 3
-                or model.s.periodic not in ((True, True, True), (True, False, True))):
-            raise ValueError('expected CPU p=3 periodic or isothermal-channel NS')
+        wall = model.boundary_preset == 'isothermal-channel'
+        self.jet = model.native_round_jet_data() if model.boundary_preset == 'open' else None
+        self.jet_pointer = self.jet.data_ptr() if self.jet is not None else None
         if len(block) != 3 or any(not isinstance(n, int) or isinstance(n, bool) or n < 1 for n in block):
             raise ValueError('three positive tile dimensions required')
         self.shape = tuple(model.s.shape)+(5,)
@@ -102,7 +101,7 @@ class GroupedViscous:
                 minus = [packed_index.get(neighbor(old, axis, -1), -1) for axis in range(3)]
                 y = old//nz % ny
                 plus = [packed_index.get(neighbor(old, axis, 1), -1) for axis in range(3)] if centered else []
-                active_meta.append([*minus, *plus, int(not model.s.periodic[1] and y == 0), int(not model.s.periodic[1] and y == ny-1)])
+                active_meta.append([*minus, *plus, int(wall and y == 0), int(wall and y == ny-1)])
             for old in owned:
                 owned_meta.append([active_index.get(neighbor(old, axis, step), -1)
                                    for step in ((-1, 1) if centered else (1,)) for axis in range(3)])
@@ -130,10 +129,10 @@ class GroupedViscous:
             scratch_bytes_per_worker=8*64*(4*self.max_primitive+(16+int(sgs is not None))*self.max_active+5*self.max_owned),
             build_directory=self.library.build_directory)
 
-    def __call__(self, state, convection):
-        return self.evaluate(state, convection)
+    def __call__(self, state, convection, t=0.):
+        return self.evaluate(state, convection, t=t)
 
-    def evaluate(self, state, convection, *, profile=False):
+    def evaluate(self, state, convection, *, profile=False, t=0.):
         for tensor in (state, convection):
             if (tensor.device.type != 'cpu' or tensor.dtype != torch.float64 or
                     tuple(tensor.shape) != self.shape or not tensor.movedim(-1, 0).is_contiguous()):
@@ -142,22 +141,24 @@ class GroupedViscous:
         timing = (ctypes.c_double*5)() if profile else None
         self.library.grouped_ldg(state.data_ptr(), convection.data_ptr(), output.data_ptr(), self.count,
             *(buffer.data_ptr() for buffer in self.buffers), *self.constants,
-            self.groups, self.max_owned, self.max_active, self.max_primitive, timing)
+            self.groups, self.max_owned, self.max_active, self.max_primitive, timing, self.jet_pointer, t)
         if profile:
             return output, dict(zip(('pack_primitive', 'gradient', 'stress_and_heat', 'dual_lifting', 'wall_and_scatter'), timing))
         return output
 
-    def diffusion_ratio(self, state):
+    def diffusion_ratio(self, state, t=0.):
         """Maximum SGS/molecular diffusion bound using group-local LDG gradients."""
         if (state.device.type != 'cpu' or state.dtype != torch.float64 or
                 tuple(state.shape) != self.shape or not state.movedim(-1, 0).is_contiguous()):
             raise ValueError('expected matching Cartesian CPU float64 SoA state')
         return self.library.grouped_sgs_ratio(state.data_ptr(), self.count,
             *(buffer.data_ptr() for buffer in self.buffers), *self.constants,
-            self.groups, self.max_owned, self.max_active, self.max_primitive)
+            self.groups, self.max_owned, self.max_active, self.max_primitive, self.jet_pointer, t)
 
     def make_rhs(self, convection):
-        return lambda state, t=0.: self.evaluate(state, convection(state))
+        if self.jet is not None:
+            return lambda state, t=0.: self.evaluate(state, convection(state, t), t=t)
+        return lambda state, t=0.: self.evaluate(state, convection(state), t=t)
 
 
 # Original public name retained for existing benchmark/diagnostic imports.

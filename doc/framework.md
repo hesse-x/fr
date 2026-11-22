@@ -46,8 +46,8 @@ python -m unittest discover -s tests -v
 ### 适用范围与待支持功能
 
 - Euler 尚无激波限制器或正性保持器；非物理密度/压力会报错。Cartesian 可选通量去混叠，非结构入口使用积分点通量求值；去混叠不替代激波捕捉。
-- 二维非结构离散实现 DG/FR-DG 成员，尚无完整 VCJH 参数族、非共形面或三维非结构体网格。
-- 公共NS黏性接口支持Cartesian及二维曲边上的LDG/BR1加惩罚；通用Cartesian二阶接口尚无Neumann/Robin配置。公共Cartesian NS提供三向周期或y向恒温无滑移壁面；曲边NS通过边界值/通量回调处理壁面及远场。三维曲边网格尚未实现。
+- 二维非结构离散实现 DG/FR-DG 成员，尚无完整 VCJH 参数族或非共形面。三维圆射流另有共形曲边六面体的原生分组路径。
+- 公共 NS 黏性接口支持 Cartesian 及二维曲边上的 LDG 和 BR1 加惩罚。通用 Cartesian 二阶接口尚无 Neumann 或 Robin 配置。公共 Cartesian NS 提供三向周期或 y 向恒温无滑移壁面，二维曲边 NS 由边界回调处理壁面及远场。圆射流的三维曲边六面体后端支持 LDG 和 WALE。
 - 固定网格斜向背景流直接复用 PML 属于数值实验，其一般稳定性和长时间完美匹配尚未证明。
 
 ## 模块分工与计算流程
@@ -81,6 +81,10 @@ Stokes 假设的应力、Fourier 导热及声学/显式黏性联合步长限制�
 由独立的`penalty=4.`指定惩罚系数。两者均支持Torch及`native-p3`。
 `boundary='periodic'` 为三向周期；`boundary='isothermal-channel'` 为 x/z 周期、
 y 向静止无滑移恒温壁面，须指定 `wall_temperature`，包含静止壁机械功通量修正。
+`boundary='open'` 为三向非周期路径，Torch 参考实现要求按
+`(coords, inside, axis, side, t)` 提供 `inviscid_boundary` 和 `viscous_boundary`。
+前者返回外侧守恒状态，后者返回黏性算子的原始变量边界值。
+圆射流算例另提供原生边界参数和入口面坐标，供 `native-p3` 的对流、LDG 和 SGS 步长扫描使用。
 `forcing` 是均匀 x 向单位体积力，动量源为 G、能量源为 Gu，默认为零。
 
 ```python
@@ -114,6 +118,9 @@ U, valid, next_dt = stepper.advance_finish(U, 0., dt, cfl=.1)
 原生 `scan` 计算有效性和时间步，`advance_finish` 返回状态、有效性与下一时间步，
 可选传入 `NativeMeanAccumulator(model).zeros()` 累计12场矩：ρ、u/v/w、p、T、uu/vv/ww/uv/uw/vw。
 无效步必须丢弃，其可选统计缓冲可能已部分更新。
+原生 RK 步进器复用两块中间阶段缓冲。默认返回独立的完整步状态，长跑调用者可用
+`advance_finish(U, t, dt, cfl, out=next_state)` 提供预分配的下步缓冲，在有效步后交换两块状态。
+`next_state` 必须与输入和统计缓冲区分离。
 
 恒流量是显式选项：`make_stepper('native-p3', constant_mass_flux=True)`，
 也适用于 Torch；它保持初始的体积平均ρu，而非设置一个新的目标值，且要求 `forcing=0`。
@@ -121,8 +128,14 @@ U, valid, next_dt = stepper.advance_finish(U, 0., dt, cfl=.1)
 
 native 边界处理默认 `boundary_mode='separate'`，在组内分别遍历内部与边界面/单元，
 复用 scratch，不新增全域边界数组或同步；`'fused'` 保留为性能和正确性对照。
+`make_stepper('native-p3', group_packet=0)` 默认静态切分融合计算的空间组。
+正整数让线程每次领取相应数量的连续组，共用现有的线程局部工作区。
 不支持的阶数、设备或边界会明确报错，不静默忽略配置。
 Rusanov/Roe 界面和体/面通量去混叠在这两条执行路径中均为公共可选项，见下节。
+原生对流和 LDG 在原始变量转换中复用 FP64 密度倒数，Rusanov 面通量也用该倒数计算声速。
+与逐项除法相比，乘法形式会产生末位舍入差异。
+在解点直接计算体通量时，原生对流按单元、分量计算通量并立即做导数和面提升，
+中间体通量只占一块 64 点临时区。启用体通量过积分时，体通量先经过求积和投影。
 几何可包含非均匀单元宽度。原生实现位于 `fr/native/cartesian_ns/`，导入不编译，
 首次构造时按源码、头文件、编译参数和 Torch 版本缓存到 `/tmp/fr-cartesian-ns-native/`。
 线程数由 `torch.set_num_threads` 控制；分组计划/步进器的调用需串行，不共享给并发任务。
@@ -379,6 +392,8 @@ viscous_rhs = ldg.diffusion(U, t, constitutive=viscous_flux)
 提供独立于 `CartesianFR` 的 `Mesh2D` / `MeshFR2D`。支持直边/曲边三角形、一般四边形及两者共形混合连接；单元无需正交、均匀或全局结构化编号。单元允许顺时针输入，读入时统一为逆时针。共享面自动建立邻接和积分点反向排列，材料及边界使用 Gmsh Physical 标签。现有笛卡尔测例保留原入口。
 
 网格生成调用 PATH 中的 `gmsh` 可执行文件，不需要 venv 安装 Python gmsh、NumPy 或 meshio。已使用本机 Gmsh 4.12.1 实测；该版本在不规则四边形示例使用 Algorithm 8 时发生崩溃，示例已改用正常运行的 Algorithm 6 + Recombine。生成文件均保留 Physical 区域，读入器支持 **ASCII MSH 2.2 / 4.1**。支持完整 Lagrange 三角形和四边形，几何阶数 1–5；主要实测为一阶和三阶。二进制、serendipity 不完整单元、非 XY 平面网格和三维体单元会明确拒绝。要求共形连接，不支持悬挂节点、自适应非共形面或混合解阶；不负责修复这些网格。
+
+`HexGeometry.read` 与二维求解器共用 ASCII MSH 解析，面向完整的二次曲边六面体（hex27）和边界四边形（quad9）。它计算高斯解点上的坐标、雅可比及逆变面积度量，返回朝外的面面积向量，并给出共形共享面的邻居及 Gauss 点重排。圆射流的 `native-hex-p3` 使用这些几何数据做原生分组 FR/LDG、WALE 和 SSPRK(4,3) 推进。
 
 #### 离散方法
 

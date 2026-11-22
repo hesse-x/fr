@@ -30,9 +30,9 @@ def load_library(boundary_mode='separate', viscous_config=None, sgs=None, interf
         result.check_returncode()
     lib = ctypes.CDLL(str(target))
     p, i, n = ctypes.c_void_p, ctypes.c_int, ctypes.c_int64
-    lib.grouped_fused.argtypes = [p, p, n, p, p, p, i, i, i, i, i, i, p]
+    lib.grouped_fused.argtypes = [p, p, n, p, p, p, i, i, i, i, i, i, p, p, ctypes.c_double, i]
     lib.grouped_fused.restype = None
-    lib.grouped_fused_rk.argtypes = [p, p, n, p, p, p, i, i, i, i, i, i, p, p, ctypes.c_double, i]
+    lib.grouped_fused_rk.argtypes = [p, p, n, p, p, p, i, i, i, i, i, i, p, p, ctypes.c_double, i, p, ctypes.c_double, i]
     lib.grouped_fused_rk.restype = None
     lib.build_directory = str(build)
     _LIBRARIES[key] = lib
@@ -40,7 +40,10 @@ def load_library(boundary_mode='separate', viscous_config=None, sgs=None, interf
 
 
 class GroupedFused:
-    def __init__(self, model, block=(4, 4, 4), *, boundary_mode='separate'):
+    def __init__(self, model, block=(4, 4, 4), *, boundary_mode='separate', group_packet=0):
+        if type(group_packet) is not int or not 0 <= group_packet <= 2**31-1:
+            raise ValueError('group_packet must be a nonnegative 32-bit integer')
+        self.group_packet = group_packet
         self.model = model
         self.convection = GroupedConvection(model, block, boundary_mode=boundary_mode)
         self.viscous = GroupedViscous(model, block, boundary_mode=boundary_mode)
@@ -60,7 +63,7 @@ class GroupedFused:
         self.conv_pointers = (ctypes.c_void_p*len(conv.buffers))(*(v.data_ptr() for v in conv.buffers))
         self.ldg_pointers = (ctypes.c_void_p*len(ldg.buffers))(*(v.data_ptr() for v in ldg.buffers))
         self.constants = (ctypes.c_double*8)(*ldg.constants)
-        self.metadata = dict(block=list(block), groups=conv.groups,
+        self.metadata = dict(block=list(block), groups=conv.groups, group_packet=group_packet,
                              dependency_pruned_halo=ldg.metadata['dependency_pruned_halo'],
                              viscous_scheme=model.viscous_scheme, boundary_mode=boundary_mode,
                              anti_alias=sorted(model.s.anti_alias), quadrature_order=model.s.quadrature_order,
@@ -75,9 +78,9 @@ class GroupedFused:
                              build_directory=self.library.build_directory)
 
     def __call__(self, state, t=0.):
-        return self.evaluate(state)
+        return self.evaluate(state, t=t)
 
-    def evaluate(self, state, *, profile=False):
+    def evaluate(self, state, *, profile=False, t=0.):
         if (state.device.type != 'cpu' or state.dtype != torch.float64 or tuple(state.shape) != self.shape
                 or not state.movedim(-1, 0).is_contiguous()):
             raise ValueError('expected matching CPU float64 SoA state')
@@ -86,13 +89,14 @@ class GroupedFused:
         conv, ldg = self.convection, self.ldg
         self.library.grouped_fused(state.data_ptr(), output.data_ptr(), self.count,
             self.conv_pointers, self.ldg_pointers, self.constants, conv.groups, conv.max_cells,
-            conv.max_faces, ldg.max_owned, ldg.max_active, ldg.max_primitive, timing)
+            conv.max_faces, ldg.max_owned, ldg.max_active, ldg.max_primitive,
+            timing, conv.jet_pointer, t, self.group_packet)
         return (output, list(timing)) if profile else output
 
     def make_rhs(self):
-        return lambda state, t=0.: self.evaluate(state)
+        return self.__call__
 
-    def rk_stage(self, original, stage, output, pending, coefficient, combined):
+    def rk_stage(self, original, stage, output, pending, coefficient, combined, t=0.):
         for tensor, components in ((original, 5), (stage, 5), (output, 5), (pending, 2)):
             if (tensor.device.type != 'cpu' or tensor.dtype != torch.float64
                     or tuple(tensor.shape) != self.shape[:-1]+(components,)
@@ -104,4 +108,5 @@ class GroupedFused:
         self.library.grouped_fused_rk(stage.data_ptr(), output.data_ptr(), self.count,
             self.conv_pointers, self.ldg_pointers, self.constants, conv.groups, conv.max_cells,
             conv.max_faces, ldg.max_owned, ldg.max_active, ldg.max_primitive,
-            original.data_ptr(), pending.data_ptr(), coefficient, int(combined))
+            original.data_ptr(), pending.data_ptr(), coefficient, int(combined), conv.jet_pointer, t,
+            self.group_packet)

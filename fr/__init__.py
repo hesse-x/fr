@@ -30,4 +30,5 @@ from .navier_stokes import CartesianNavierStokes
 __all__ += ['NavierStokes', 'CartesianNavierStokes']
 
 from .cartesian_mesh import CartesianMesh
-__all__ += ['CartesianMesh']
+from .hex_geometry import HexGeometry
+__all__ += ['CartesianMesh','HexGeometry']

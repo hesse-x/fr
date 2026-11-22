@@ -10,6 +10,7 @@
 #include "avx2.hpp"
 #include "boundaries.hpp"
 #include "sgs.hpp"
+#include "round_jet_boundary.hpp"
 using simd::Vec;
 
 namespace fr_ldg {
@@ -19,7 +20,8 @@ inline void group(const double* input,const double* convection,double* output,in
     const int64_t* offsets,const int64_t* primitive_ids,const int64_t* active_meta,const int64_t* owned_meta,
     const double* widths,const double* L,const double* R,const double* primal,const double* dual,
     const double* gl,const double* gr,double gamma,double mu,double kappa,double wall_temperature,
-    double forcing,double* scratch,double* timing,Output sink={},double* diffusion_ratio=nullptr,fr_sgs::Config sgs={}) {
+    double forcing,double* scratch,double* timing,Output sink={},double* diffusion_ratio=nullptr,
+    fr_sgs::Config sgs={},const double* jet=nullptr,double time=0.) {
     double pack_total=0,gradient_total=0,flux_total=0,divergence_total=0,store_total=0;
             int64_t os=offsets[g*3],as=offsets[g*3+1],bs=offsets[g*3+2];
             int no=offsets[(g+1)*3]-os,na=offsets[(g+1)*3+1]-as,nb=offsets[(g+1)*3+2]-bs;
@@ -47,17 +49,32 @@ inline void group(const double* input,const double* convection,double* output,in
                 for(int n=0;n<N;n+=4) {
                     int64_t at=old*N+n;
                     Vec rho=simd::load(input+at);
-                    Vec u=simd::load(input+elements*N+at)/rho;
-                    Vec v=simd::load(input+2*elements*N+at)/rho;
-                    Vec w=simd::load(input+3*elements*N+at)/rho;
+                    const Vec inv_rho=Vec(1.)/rho;
+                    Vec u=simd::load(input+elements*N+at)*inv_rho;
+                    Vec v=simd::load(input+2*elements*N+at)*inv_rho;
+                    Vec w=simd::load(input+3*elements*N+at)*inv_rho;
                     Vec pressure=(gamma-1)*(simd::load(input+4*elements*N+at)-.5*rho*((u*u+v*v)+w*w));
                     simd::store(primitive+e*N+n,u);
                     simd::store(primitive+ps+e*N+n,v);
                     simd::store(primitive+2*ps+e*N+n,w);
-                    simd::store(primitive+3*ps+e*N+n,pressure/rho);
+                    simd::store(primitive+3*ps+e*N+n,pressure*inv_rho);
                 }
             }
             if(timing) { pack_total+=fr_parallel::wall_time()-t; t=fr_parallel::wall_time(); }
+            auto inlet_trace=[&](int64_t old,double (&target)[5][F]) {
+                for(int f=0;f<F;++f) {
+                    double v[3],weight;
+                    fr_round_jet::nozzle(jet,old,f,time,v,weight);
+                    for(int c=0;c<3;++c) target[c][f]=v[c];
+                    target[3][f]=jet[0];
+                    target[4][f]=weight;
+                }
+            };
+            auto open_trace=[&](const double* field,int axis,int f,int c,const double (&target)[5][F]) {
+                Vec inside=simd::trace(field,axis,f,L);
+                if(axis!=0) return inside;
+                return inside+simd::load(target[4]+f)*(simd::load(target[c]+f)-inside);
+            };
 #if FR_NS_SPLIT_BOUNDARY
             auto gradient_sweep = [&](auto wall_tag) {
                 constexpr bool Wall=decltype(wall_tag)::value;
@@ -67,6 +84,9 @@ inline void group(const double* input,const double* convection,double* output,in
                     if(bool(axis==1 && (meta[3] || meta[4]))!=Wall) continue;
                     int64_t old=primitive_ids[bs+e];
                     double scale=2/widths[old*3+axis];
+                    const bool open_lower=jet && meta[axis]<0;
+                    double target[5][F];
+                    if(open_lower && axis==0) inlet_trace(old,target);
                     for(int c=0;c<4;++c) {
                         // Diagonal velocity derivatives enter every stress trace;
                         // off-diagonals enter row/column directions, dT only its row.
@@ -81,7 +101,7 @@ inline void group(const double* input,const double* convection,double* output,in
                             Vec lines[4],updated[4];
                             simd::load_lines(field,axis,f,lines);
                             Vec wall=fr_ns_boundary::primitive_value(c,wall_temperature);
-                            Vec common=(Wall && meta[3]) ? wall:
+                            Vec common=open_lower ? open_trace(field,axis,f,c,target) : (Wall && meta[3]) ? wall:
                                 simd::trace(primitive+c*ps+meta[axis]*N,axis,f,R);
                             Vec delta=0.;
                             if(Wall && meta[4]) delta=wall-simd::trace(field,axis,f,R);
@@ -105,6 +125,9 @@ inline void group(const double* input,const double* convection,double* output,in
                     const int64_t* meta=active_meta+(as+e)*5;
                 int64_t old=primitive_ids[bs+e];
                 double scale=2/widths[old*3+axis];
+                const bool open_lower=jet && meta[axis]<0;
+                double target[5][F];
+                if(open_lower && axis==0) inlet_trace(old,target);
                 for(int c=0;c<4;++c) {
                     // Diagonal velocity derivatives enter every stress trace;
                     // off-diagonals enter row/column directions, dT only its row.
@@ -119,7 +142,7 @@ inline void group(const double* input,const double* convection,double* output,in
                         Vec lines[4],updated[4];
                         simd::load_lines(field,axis,f,lines);
                         Vec wall=fr_ns_boundary::primitive_value(c,wall_temperature);
-                        Vec common=(axis==1 && meta[3]) ? wall:
+                        Vec common=open_lower ? open_trace(field,axis,f,c,target) : (axis==1 && meta[3]) ? wall:
                             simd::trace(primitive+c*ps+meta[axis]*N,axis,f,R);
                         Vec delta=0.;
                         if(axis==1 && meta[4]) delta=wall-simd::trace(field,axis,f,R);
@@ -204,8 +227,7 @@ inline void group(const double* input,const double* convection,double* output,in
                     constexpr bool Wall=decltype(wall_tag)::value;
                     for(int e=0;e<no;++e) {
                         const int64_t* meta=owned_meta+(os+e)*3;
-                        const int64_t* boundary=active_meta+(as+e)*5;
-                        if(bool(axis==1 && boundary[4])!=Wall) continue;
+                        if(bool(meta[axis]<0)!=Wall) continue;
                         double scale=2/widths[primitive_ids[bs+e]*3+axis];
                         for(int c=0;c<4;++c) {
                             const double* field=flux+c*gs+e*N;
@@ -231,15 +253,14 @@ inline void group(const double* input,const double* convection,double* output,in
                     }
                 };
                 divergence_sweep(std::false_type{});
-                if(axis==1) divergence_sweep(std::true_type{});
+                if(jet || axis==1) divergence_sweep(std::true_type{});
 #else
                 for(int e=0;e<no;++e) {
                     const int64_t* meta=owned_meta+(os+e)*3;
-                    const int64_t* boundary=active_meta+(as+e)*5;
                     double scale=2/widths[primitive_ids[bs+e]*3+axis];
                     for(int c=0;c<4;++c) {
                         const double* field=flux+c*gs+e*N;
-                        bool upper=axis==1 && boundary[4];
+                        bool upper=meta[axis]<0;
                         const double* neighbor=upper ? field:flux+c*gs+meta[axis]*N;
                         for(int f=0;f<F;f+=4) {
                             Vec lines[4],previous[4],updated[4];

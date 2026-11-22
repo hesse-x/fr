@@ -5,10 +5,12 @@
 #include <cstdint>
 #include <cstring>
 #include <vector>
+#include <type_traits>
 #include "../../parallel.hpp"
 #include "avx2.hpp"
 #include "boundaries.hpp"
 #include "roe.hpp"
+#include "round_jet_boundary.hpp"
 using simd::Vec;
 
 namespace fr_convection {
@@ -17,7 +19,7 @@ inline int scratch_capacity(int max_cells,int max_faces) {
 #if FR_NS_VOLUME_AA
     return 29*max_cells*N+10*F+5*max_faces*F;
 #else
-    return 19*max_cells*N+10*F+5*max_faces*F;
+    return 14*max_cells*N+10*F+5*max_faces*F;
 #endif
 }
 template<int A,int Points=F>
@@ -26,8 +28,9 @@ void numerical(const double* minus, const double* plus, double* common,
     constexpr int F=Points;
     for(int f=0;f<F;f+=4) {
         Vec rm=simd::load(minus+f),rp=simd::load(plus+f);
-        Vec um=simd::load(minus+F+f)/rm,vm=simd::load(minus+2*F+f)/rm,wm=simd::load(minus+3*F+f)/rm;
-        Vec up=simd::load(plus+F+f)/rp,vp=simd::load(plus+2*F+f)/rp,wp=simd::load(plus+3*F+f)/rp;
+        const Vec inv_rm=Vec(1.)/rm,inv_rp=Vec(1.)/rp;
+        Vec um=simd::load(minus+F+f)*inv_rm,vm=simd::load(minus+2*F+f)*inv_rm,wm=simd::load(minus+3*F+f)*inv_rm;
+        Vec up=simd::load(plus+F+f)*inv_rp,vp=simd::load(plus+2*F+f)*inv_rp,wp=simd::load(plus+3*F+f)*inv_rp;
         Vec pm=(gamma-1)*(simd::load(minus+4*F+f)-.5*rm*((um*um+vm*vm)+wm*wm));
         Vec pp=(gamma-1)*(simd::load(plus+4*F+f)-.5*rp*((up*up+vp*vp)+wp*wp));
         Vec am=A==0?um:A==1?vm:wm,ap=A==0?up:A==1?vp:wp;
@@ -35,8 +38,8 @@ void numerical(const double* minus, const double* plus, double* common,
         Vec dissipation[5];
         fr_roe::dissipation<A,Points>(minus,plus,f,gamma,dissipation);
 #else
-        Vec sm=simd::abs(am)+simd::sqrt(gamma*pm/rm);
-        Vec sp=simd::abs(ap)+simd::sqrt(gamma*pp/rp);
+        Vec sm=simd::abs(am)+simd::sqrt(gamma*pm*inv_rm);
+        Vec sp=simd::abs(ap)+simd::sqrt(gamma*pp*inv_rp);
         Vec speed=.5*simd::maximum(sm,sp);
 #endif
         for(int c=0;c<C;++c) {
@@ -60,29 +63,78 @@ inline void solve_face(int axis,const double* minus,const double* plus,double* o
     else numerical<2,Points>(minus,plus,out,reference+10,gamma);
 }
 #include "dealiasing.hpp"
-template<int A>
-void volume(const double* packed, const double* primitive, double* flux,
-            int count, const double* offset) {
-    const int stride=count*N;
-    const double* vel=primitive+A*stride;
-    const double* pressure=primitive+3*stride;
-    for(int c=0;c<C;++c) {
-        for(int n=0;n<stride;n+=4) {
-            Vec velocity=simd::load(vel+n),p=simd::load(pressure+n);
-            Vec value=simd::load(packed+c*stride+n)*velocity;
-            if(c==A+1) value=value+p;
-            if(c==4) value=value+p*velocity;
-            simd::store(flux+c*stride+n,value-offset[c]);
+#if !FR_NS_VOLUME_AA
+template<int Axis,int Component>
+inline Vec volume_value(Vec state,Vec velocity,Vec pressure,double offset) {
+    Vec value=state*velocity;
+    if constexpr(Component==Axis+1) value=value+pressure;
+    if constexpr(Component==4) value=value+pressure*velocity;
+    return value-offset;
+}
+
+template<int Axis,int Component>
+inline void cell_volume_and_lift(const double* u,const double* velocity,const double* pressure,
+    double* dst,const double* cl,const double* cr,const double* matrix,const double* gl,
+    const double* gr,double offset,double scale) {
+    constexpr bool uses_pressure=Component==Axis+1 || Component==4;
+    alignas(32) double cell_flux[N];
+    // Keep each flux component close to the contraction that consumes it.
+    for(int n=0;n<N;n+=4) {
+        Vec p=0.;
+        if constexpr(uses_pressure) p=simd::load(pressure+n);
+        simd::store(cell_flux+n,volume_value<Axis,Component>(
+            simd::load(u+n),simd::load(velocity+n),p,offset));
+    }
+    for(int f=0;f<F;f+=4) {
+        Vec lines[4],previous[4],updated[4];
+        simd::load_lines(cell_flux,Axis,f,lines);
+        if constexpr(Axis==0) for(auto& value:previous) value=0.;
+        else simd::load_lines(dst,Axis,f,previous);
+        Vec common_l=simd::load(cl+f),common_r=simd::load(cr+f);
+        for(int i=0;i<Q;++i) {
+            Vec value=0.;
+            for(int j=0;j<Q;++j) value=value+lines[j]*matrix[i*Q+j];
+            value=value+gl[i]*common_l;
+            value=value+gr[i]*common_r;
+            updated[i]=previous[i]-scale*value;
         }
+        simd::store_lines(dst,Axis,f,updated);
     }
 }
+
+template<int Axis>
+inline void direction_volume_and_lift(int64_t start,int count,const int64_t* cells,
+    const int64_t* cell_faces,const double* widths,const double* packed,const double* primitive,
+    const double* common,const double* matrix,const double* gl,const double* gr,
+    const double* reference,double* result) {
+    const int stride=count*N;
+    for(int e=0;e<count;++e) {
+        const int64_t left=cell_faces[(start+e)*6+Axis*2],right=cell_faces[(start+e)*6+Axis*2+1];
+        const double scale=2/widths[cells[start+e]*3+Axis];
+        const double* velocity=primitive+Axis*stride+e*N;
+        const double* pressure=primitive+3*stride+e*N;
+        auto component=[&](auto tag) {
+            constexpr int c=decltype(tag)::value;
+            cell_volume_and_lift<Axis,c>(packed+c*stride+e*N,velocity,pressure,
+                result+c*stride+e*N,common+left*5*F+c*F,common+right*5*F+c*F,matrix,gl,gr,
+                reference[Axis*5+c],scale);
+        };
+        component(std::integral_constant<int,0>{});
+        component(std::integral_constant<int,1>{});
+        component(std::integral_constant<int,2>{});
+        component(std::integral_constant<int,3>{});
+        component(std::integral_constant<int,4>{});
+    }
+}
+#endif
 struct Group { const double* result; const double* primitive; const double* packed; int count; };
 inline Group group(const double* input,int64_t elements,int g,
     const int64_t* group_offsets,const int64_t* cells,const int64_t* face_offsets,
     const int64_t* faces,const int64_t* cell_faces,const double* widths,
     const double* L,const double* R,const double* matrix,const double* gl,const double* gr,
     const double* reference,double gamma,double* scratch,double* timing,
-    const double* interpolation=nullptr,const double* projection=nullptr) {
+    const double* interpolation=nullptr,const double* projection=nullptr,
+    const double* jet=nullptr,double time=0.) {
     double pack_total=0,face_total=0,volume_total=0;
             const int64_t start=group_offsets[g], end=group_offsets[g+1];
             const int count=end-start, stride=count*N;
@@ -90,11 +142,11 @@ inline Group group(const double* input,int64_t elements,int g,
             const int nf=face_offsets[g+1]-first_face;
             double* packed=scratch;
             double* primitive=packed+5*stride;
-            double* flux=primitive+4*stride;
 #if FR_NS_VOLUME_AA
+            double* flux=primitive+4*stride;
             double* result=flux+15*stride;
 #else
-            double* result=flux+5*stride;
+            double* result=primitive+4*stride;
 #endif
             double* face_states=result+5*stride;
             double* common=face_states+10*F;
@@ -129,7 +181,9 @@ inline Group group(const double* input,int64_t elements,int g,
                 }
                 if(wall) {
                     const int ghost=wall<0 ? 0:1, interior=1-ghost;
-                    for(int c=0;c<C;++c) for(int n=0;n<F;n+=4) {
+                    if(jet) fr_round_jet::exterior(jet,face[1+interior],axis,wall,time,
+                        face_state+interior*5*F,face_state+ghost*5*F,gamma);
+                    else for(int c=0;c<C;++c) for(int n=0;n<F;n+=4) {
                         Vec value=simd::load(face_state+(interior*5+c)*F+n);
                         value=fr_ns_boundary::reflected_momentum(value,c,axis);
                         simd::store(face_state+(ghost*5+c)*F+n,value);
@@ -141,12 +195,24 @@ inline Group group(const double* input,int64_t elements,int g,
 #else
                 solve_face(axis,face_state,face_state+5*F,common+f*5*F,reference,gamma);
 #endif
+                if(jet && axis==0 && wall>0 && jet[4]) {
+                    alignas(32) double gradient[C*F];
+                    for(int c=0;c<C;++c) {
+                        const double* u=packed+c*stride+face[3]*N;
+                        for(int n=0;n<F;n+=4)
+                            simd::store(gradient+c*F+n,simd::trace(u,0,n,jet+6));
+                    }
+                    fr_round_jet::acoustic_outlet(jet,face_state,gradient,common+f*5*F,gamma);
+                }
             }
             if(timing) { pack_total+=fr_parallel::wall_time()-t; t=fr_parallel::wall_time(); }
             if(timing) { face_total+=fr_parallel::wall_time()-t; t=fr_parallel::wall_time(); }
             for(int n=0;n<stride;n+=4) {
                 Vec rho=simd::load(packed+n);
-                Vec u=simd::load(packed+stride+n)/rho,v=simd::load(packed+2*stride+n)/rho,w=simd::load(packed+3*stride+n)/rho;
+                const Vec inv_rho=Vec(1.)/rho;
+                Vec u=simd::load(packed+stride+n)*inv_rho;
+                Vec v=simd::load(packed+2*stride+n)*inv_rho;
+                Vec w=simd::load(packed+3*stride+n)*inv_rho;
                 simd::store(primitive+n,u);
                 simd::store(primitive+stride+n,v);
                 simd::store(primitive+2*stride+n,w);
@@ -154,16 +220,8 @@ inline Group group(const double* input,int64_t elements,int g,
             }
 #if FR_NS_VOLUME_AA
             volume_overintegrated(packed,flux,count,reference,gamma,interpolation,projection);
-#endif
             for(int axis=0;axis<3;++axis) {
-#if FR_NS_VOLUME_AA
                 const double* axis_flux=flux+axis*5*stride;
-#else
-                const double* axis_flux=flux;
-                if(axis==0) volume<0>(packed,primitive,flux,count,reference);
-                else if(axis==1) volume<1>(packed,primitive,flux,count,reference+5);
-                else volume<2>(packed,primitive,flux,count,reference+10);
-#endif
                 for(int c=0;c<C;++c) for(int e=0;e<count;++e) {
                     const int64_t left=cell_faces[(start+e)*6+axis*2];
                     const int64_t right=cell_faces[(start+e)*6+axis*2+1];
@@ -190,6 +248,14 @@ inline Group group(const double* input,int64_t elements,int g,
                     }
                 }
             }
+#else
+            direction_volume_and_lift<0>(start,count,cells,cell_faces,widths,packed,primitive,
+                common,matrix,gl,gr,reference,result);
+            direction_volume_and_lift<1>(start,count,cells,cell_faces,widths,packed,primitive,
+                common,matrix,gl,gr,reference,result);
+            direction_volume_and_lift<2>(start,count,cells,cell_faces,widths,packed,primitive,
+                common,matrix,gl,gr,reference,result);
+#endif
             if(timing) { volume_total+=fr_parallel::wall_time()-t; t=fr_parallel::wall_time(); }
     if(timing) { timing[0]+=pack_total; timing[1]+=face_total; timing[2]+=volume_total; }
     return {result,primitive,packed,count};
