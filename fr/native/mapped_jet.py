@@ -53,6 +53,77 @@ def _pointers(arrays):
         a.data_ptr() if torch.is_tensor(a) else a.ctypes.data for a in arrays))
 
 
+def _local_group_order(count, links, weights, packet):
+    """Pack strongly connected neighbors into consecutive OpenMP chunks."""
+    incoming = [{} for _ in range(count)]
+    adjacent = [{} for _ in range(count)]
+    for (producer, reader), weight in zip(links.tolist(), weights.tolist()):
+        incoming[reader][producer] = weight
+        total = adjacent[producer].get(reader, 0)+weight
+        adjacent[producer][reader] = adjacent[reader][producer] = total
+
+    unused = set(range(count))
+    order = []
+    for seed in range(count):
+        if seed not in unused:
+            continue
+        batch, frontier = [], {}
+        cell = seed
+        while True:
+            batch.append(cell)
+            unused.remove(cell)
+            frontier.pop(cell, None)
+            if len(batch) == packet or not unused:
+                break
+            for neighbor, weight in adjacent[cell].items():
+                if neighbor in unused:
+                    frontier[neighbor] = frontier.get(neighbor, 0)+weight
+            cell = max(frontier, key=lambda i: (frontier[i], -i)) if frontier else min(unused)
+        # Within the chunk, favor producers with the fewest unfinished inputs.
+        waiting = set(batch)
+        while waiting:
+            cell = min(waiting, key=lambda i: (
+                sum(w for j, w in incoming[i].items() if j in waiting), i))
+            order.append(cell)
+            waiting.remove(cell)
+    return np.asarray(order, dtype=np.int64)
+
+
+MAPPED_GROUP_PACKET = 8
+
+
+def _deferred_interface_plan(group, packet):
+    """Route the LDG dual trace from its owning group to its one reader."""
+    geom = group.geometry
+    sizes = np.diff(group.owned_offsets)
+    owner = np.repeat(np.arange(len(sizes)), sizes)
+    other = geom.face_neighbor
+    cross = (geom.tags == 0) & (owner[:, None] != owner[other // 6])
+    sends = np.flatnonzero(cross & (geom.primal_inside == 0))
+    receives = other.ravel()[sends]
+    routes = np.zeros((geom.ne, 6), dtype=np.int64)
+    # Positive slots publish; negative slots read their peer's viscous trace.
+    slots = np.arange(1, len(sends)+1)
+    routes.ravel()[sends] = slots
+    routes.ravel()[receives] = -slots
+    links, weights = np.unique(np.stack((owner[sends // 6], owner[receives // 6]), axis=1),
+                               axis=0, return_counts=True)
+    readers = np.r_[0, np.cumsum(np.bincount(links[:, 0], minlength=len(sizes)))]
+    waits = np.bincount(links[:, 1], minlength=len(sizes))
+    pending_cells = np.unique(receives // 6)
+    residual_slots = np.full(geom.ne, -1, dtype=np.int64)
+    residual_slots[pending_cells] = np.arange(len(pending_cells))
+    viscous_traces = np.empty((len(sends), 5, 16))
+    deferred_residuals = np.empty((len(pending_cells), 5, 64))
+    order = _local_group_order(len(sizes), links, weights, packet)
+    chunk = np.argsort(order)//packet
+    same_chunk = int(weights[chunk[links[:, 0]] == chunk[links[:, 1]]].sum())
+    arrays = [routes, viscous_traces, deferred_residuals,
+              readers, links[:, 1].copy(), waits, residual_slots, owner[sends // 6],
+              np.zeros(geom.ne, dtype=np.uint8), order]
+    return arrays, (same_chunk/len(sends) if len(sends) else 0.)
+
+
 def _open_face_weights(tags, cells, face, nodes, positions, nozzle_radius, shear_width):
     """Blend to the ambient Riemann flux at the endcap/side intersections."""
     tangents = [axis for axis in range(3) if axis != face//2]
@@ -74,11 +145,11 @@ def _open_face_weights(tags, cells, face, nodes, positions, nozzle_radius, shear
 
 
 class MappedJetStepper:
-    """One process owns the stage buffers and a spatially grouped native plan."""
+    """Grouped FR/LDG with shared viscous traces and deferred face corrections."""
 
     def __init__(self, mesh, block_shapes, *, eq, pressure, shear_width, disturbance,
-                 nozzle_radius, outlet, threads, group_packet, modal_filter,
-                 split_geometry=False):
+                 nozzle_radius, outlet, threads, modal_filter,
+                 group_packet=MAPPED_GROUP_PACKET, split_geometry=False):
         outlet_mode = {'characteristic': 0, 'nscbc': 1, 'nscbc-3d': 2,
                        'nscbc-3d-open': 3, 'nscbc-3d-unified': 4,
                        'nscbc-3d-ambient': 5}[outlet]
@@ -169,7 +240,7 @@ class MappedJetStepper:
         forward = faces.ravel() < target_face.ravel()
         choose[target_face.ravel()[forward]] = ~choose[forward]
         original.primal_inside = choose.reshape(ne, 6).astype(np.int64)
-        group = HexGroups(original, shared_faces=True)
+        group = HexGroups(original)
         self.order, self.inverse = group.order, group.inverse
         geom = group.geometry
         metric = np.ascontiguousarray(geom.C.transpose(0, 2, 3, 1))
@@ -226,10 +297,16 @@ class MappedJetStepper:
                      np.empty((nb,5,16)), np.empty((nb,6,16)), empty, empty, sizes,
                      group.shared_sources, group.owned_offsets, group.shared_peers, indices, constants,
                      pack_trace_permutations(geom.neighbor_points), masks]
+        packet = group_packet if group_packet > 0 else (len(group.records)+threads-1)//threads
+        interfaces, same_chunk = _deferred_interface_plan(group, packet)
+        self.plan.extend(interfaces)
         self.plan_ptr = _pointers(self.plan)
         if not self.cartesian_cells:
             self.plan_ptr[17] = None
         self.metadata = group.metadata
+        self.metadata['group_packet'] = group_packet
+        self.metadata['deferred_buffer_bytes'] = sum(buffer.nbytes for buffer in self.plan[22:24])
+        self.metadata['interface_chunk_fraction'] = same_chunk
         self._rhs_buffer = self._stage_a = self._stage_b = None
         self._scanned = None
         self.filter = None
@@ -237,6 +314,11 @@ class MappedJetStepper:
             closure = ConcentrationModalFilter(.1, 36., 2)
             matrix, sensor = closure.matrices(SimpleNamespace(z=z, D=D, p=3))
             self.filter = weights, matrix, sensor, np.zeros(4), np.zeros(ne), np.zeros(ne,dtype=np.int64)
+
+    def deferred_work(self):
+        """Count faces and cells suspended in the latest successful evaluation."""
+        masks = self.plan[29]
+        return int(np.count_nonzero(np.unpackbits(masks))), int(np.count_nonzero(masks))
 
     def _evaluate(self, state, t, *, original=None, target=None, dt=0., stage=-1,
                   scan_stage=False):

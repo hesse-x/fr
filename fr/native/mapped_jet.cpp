@@ -7,9 +7,6 @@
 #include "time.hpp"
 #include "hex_modal_filter.hpp"
 #include "cartesian_ns/kernels/round_jet_boundary.hpp"
-#ifndef FR_HEX_FUSED_VOLUME
-#define FR_HEX_FUSED_VOLUME 1
-#endif
 namespace {
 constexpr int N=64,F=16,Q=4;
 inline int node(int a,int f,int i){return a==0?16*i+f:a==1?16*(f/4)+4*i+f%4:16*(f/4)+4*(f%4)+i;}
@@ -94,10 +91,8 @@ inline void jet_exterior(const double* u,const double* far,const double* normal,
 }
 }
 
-#if FR_HEX_FUSED_VOLUME
 #include "hex_fr_optimized.hpp"
 #include "hex_fr_grouped.hpp"
-#endif
 
 extern "C" void mapped_hex_stage(int64_t count,const double* original,double* state,const double* rhs,double dt,int stage,int threads){
     #pragma omp parallel for num_threads(threads) schedule(dynamic,65536)
@@ -109,13 +104,13 @@ extern "C" int mapped_jet_rhs(int64_t ne,const double* input,double* output,void
     double gamma,double mu,double prandtl,int threads,double* scan,
     const double* original,double* stage_state,double dt,int rkstage,int scan_stage,void** plan){
     if(plan[17]){
-        if(rkstage<0 || scan_stage) return mapped_group::evaluate<true,true,false,true,true,true>(
+        if(rkstage<0 || scan_stage) return mapped_group::evaluate<true,true,false,true,true>(
             ne,input,output,data,gamma,mu,prandtl,-1.,threads,scan,original,stage_state,dt,rkstage,plan);
-        return mapped_group::evaluate<true,false,false,true,true,true>(
+        return mapped_group::evaluate<true,false,false,true,true>(
             ne,input,output,data,gamma,mu,prandtl,-1.,threads,scan,original,stage_state,dt,rkstage,plan);
     }
-    if(rkstage<0 || scan_stage) return mapped_group::evaluate<true,true,false,true>(
+    if(rkstage<0 || scan_stage) return mapped_group::evaluate<true,true>(
         ne,input,output,data,gamma,mu,prandtl,-1.,threads,scan,original,stage_state,dt,rkstage,plan);
-    return mapped_group::evaluate<true,false,false,true>(
+    return mapped_group::evaluate<true,false>(
         ne,input,output,data,gamma,mu,prandtl,-1.,threads,scan,original,stage_state,dt,rkstage,plan);
 }

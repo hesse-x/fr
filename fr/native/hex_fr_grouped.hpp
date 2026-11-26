@@ -1,8 +1,11 @@
 #pragma once
+#include <algorithm>
+#include <atomic>
 #include <type_traits>
+#include <vector>
 #include "hex_wale_pipeline.hpp"
 #include "hex_trace_map.hpp"
-// Group-local FR/LDG: compact directional halos, no global face work arrays.
+// Group-local FR/LDG with directional halos and optional deferred dual traces.
 namespace mapped_group {
 using namespace mapped_simd;
 template<bool Rect,int Mask=511,bool JetAxes=false> struct CellGeometry {
@@ -30,7 +33,22 @@ inline Vec local_trace(const double* field,int components,int slot,const int64_t
     return Vec(_mm256_i64gather_pd(base,_mm256_setr_epi64x(first,neighbor[q+1]%16,neighbor[q+2]%16,last),8));
 }
 
-template<bool SoA,bool Scan,bool Rotating=false,bool Shared=false,bool Compact=false,bool JetAxes=false>
+template<bool SoA>
+inline void reconstruct_state_face(const double* input,int64_t count,int64_t cell,
+                                   int face,const double* weights,double* out){
+    for(int c=0;c<5;++c){
+        double unpacked[64];
+        const double* values;
+        if constexpr(SoA)values=input+c*count+cell*64;
+        else{
+            for(int n=0;n<64;n+=4)simd::store(unpacked+n,state_load<false>(input,count,cell*64+n,c));
+            values=unpacked;
+        }
+        for(int q=0;q<16;q+=4)simd::store(out+c*16+q,simd::trace(values,face/2,q,weights));
+    }
+}
+
+template<bool SoA,bool Scan,bool Rotating=false,bool Compact=false,bool JetAxes=false>
 int evaluate(int64_t ne,const double* input,double* output,void** data,double gamma,double mu,double prandtl,
     double wall_temperature,int threads,double* scan,const double* original,double* stage_state,double dt,int rkstage,void** plan){
     const auto inverseJ=(const double*)data[0],C=(const double*)data[1],S=(const double*)data[2];
@@ -48,6 +66,14 @@ int evaluate(int64_t ne,const double* input,double* output,void** data,double ga
     const int64_t* compact_indices=nullptr;const double* compact_constants=nullptr;
     if constexpr(Compact){compact_indices=(const int64_t*)plan[17];compact_constants=(const double*)plan[18];}
     const auto face_codes=(const uint32_t*)plan[19];
+    const auto routes=static_cast<const int64_t*>(plan[21]);
+    auto shared_trace=static_cast<double*>(plan[22]);
+    auto deferred_residuals=static_cast<double*>(plan[23]);
+    const auto residual_slots=static_cast<const int64_t*>(plan[27]);
+    const auto producers=static_cast<const int64_t*>(plan[28]);
+    auto pending_faces=static_cast<uint8_t*>(plan[29]);
+    std::vector<std::atomic<bool>> published(sizes[0]);
+    for(auto& ready:published)ready.store(false,std::memory_order_relaxed);
     const int64_t count=ne*64;const double kappa=mu*gamma/((gamma-1)*prandtl);
     double vf[3],pf,af;primitive(far,gamma,vf,pf,af);double farW[4]={vf[0],vf[1],vf[2],pf/far[0]},reference[3][5],weak[16];
     for(int x=0;x<3;++x)inviscid(far,vf,pf,x,reference[x]);
@@ -58,20 +84,20 @@ int evaluate(int64_t ne,const double* input,double* output,void** data,double ga
     // immutable input halos. Each owned cell and boundary face has one writer.
     omp_sched_t old_schedule;int old_chunk;omp_get_schedule(&old_schedule,&old_chunk);
     omp_set_schedule(sizes[3]?omp_sched_dynamic:omp_sched_static,sizes[3]?int(sizes[4]):0);
-    #pragma omp parallel for num_threads(threads) schedule(runtime) reduction(|:invalid) reduction(max:max_adv,max_vis)
-    for(int g=0;g<sizes[0];++g){
-        const int64_t* r=records+g*14;const int no=r[0],na=r[1],np=r[2],nu=r[3],nw=r[4],nv=r[5];
-        const auto cells=pids+r[6],u_slot=uslots+r[7],w_slot=wslots+r[8],v_slot=vslots+r[9];
-        const auto w_other=wneighbors+r[10],u_other=uneighbors+r[11],v_source=vsources+r[12];
+    enum class Completion { Invalid, Finished, Suspended };
+    auto run_group=[&](int g,bool late,const std::atomic<int64_t>* remaining,
+                       int& invalid,double& max_adv,double& max_vis){
+        const int64_t* r=records+g*13;const int no=r[0],np=r[1],nu=r[2],nw=r[3],nv=r[4];
+        const auto cells=pids+r[5],u_slot=uslots+r[6],w_slot=wslots+r[7],v_slot=vslots+r[8];
+        const auto w_other=wneighbors+r[9],u_other=uneighbors+r[10],v_source=vsources+r[11];
         double* wn=workspace+omp_get_thread_num()*sizes[1];
-        double* un=wn+na*4*64;double* traceU=un+no*5*64;
+        double* un=wn+no*4*64;double* traceU=un+no*5*64;
         double* traceW=traceU+nu*5*16;double* traceV=traceW+nw*4*16;
         double* partial=traceV+nv*6*16;
-        const int64_t* face_sources=nullptr;const int64_t* face_peers=nullptr;
-        if constexpr(Shared){
-            int64_t offset=((const int64_t*)plan[15])[g]*6;
-            face_sources=(const int64_t*)plan[14]+offset;face_peers=(const int64_t*)plan[16]+offset;
-        }
+        const int64_t offset=static_cast<const int64_t*>(plan[15])[g]*6;
+        const auto face_sources=static_cast<const int64_t*>(plan[14])+offset;
+        const auto face_peers=static_cast<const int64_t*>(plan[16])+offset;
+        auto prepare=[&](){
         int bad=0;
         for(int pidx=0;pidx<np;++pidx){
             int64_t e=cells[pidx];
@@ -91,8 +117,10 @@ int evaluate(int64_t ne,const double* input,double* output,void** data,double ga
                     advmax=simd::maximum(advmax,adv);vismax=simd::maximum(vismax,vis*std::max(4*mu/3,kappa*(gamma-1))/u[0]);}}
             }
             if constexpr(Scan){if(pidx<no){max_adv=std::max(max_adv,maximum(advmax));max_vis=std::max(max_vis,maximum(vismax));}}
-            if(pidx<na)std::copy(&W[0][0],&W[0][0]+4*64,wn+pidx*4*64);
-            if(pidx<no)std::copy(&U[0][0],&U[0][0]+5*64,un+pidx*5*64);
+            if(pidx<no){
+                std::copy(&W[0][0],&W[0][0]+4*64,wn+pidx*4*64);
+                std::copy(&U[0][0],&U[0][0]+5*64,un+pidx*5*64);
+            }
             for(int f=0;f<6;++f){int us=int(u_slot[pidx*6+f]),ws=int(w_slot[pidx*6+f]);
                 if(us<0&&ws<0)continue;
                 for(int q=0;q<16;q+=4){const double* vector=f%2?R:L;
@@ -106,9 +134,9 @@ int evaluate(int64_t ne,const double* input,double* output,void** data,double ga
             if constexpr(Compact){if(compact_indices[e]<0)primitive_cell(std::true_type{});else primitive_cell(std::false_type{});}
             else primitive_cell(std::false_type{});
         }
-        if(bad){invalid=1;continue;}
-        for(int aidx=0;aidx<na;++aidx){
-            const int64_t e=cells[aidx];const bool owned=aidx<no;
+        if(bad){invalid=1;return false;}
+        for(int aidx=0;aidx<no;++aidx){
+            const int64_t e=cells[aidx];
             auto active_cell=[&](auto tag){constexpr int Mask=decltype(tag)::value;constexpr bool Rect=Mask==0;
             CellGeometry<Rect,Rect?511:Mask,JetAxes> geo(inverseJ,C,S,e,compact_indices,compact_constants);
 
@@ -117,7 +145,7 @@ int evaluate(int64_t ne,const double* input,double* output,void** data,double ga
             const double (*U)[64]=reinterpret_cast<const double(*)[64]>(un+aidx*5*64);
             alignas(32) double pressure[64],G[4][3][64],derivative[4][64];
             if constexpr(!Rect)std::fill(&G[0][0][0],&G[0][0][0]+4*3*64,0.);
-            if(owned)for(int n=0;n<64;n+=4){Vec rho=simd::load(U[0]+n),vx=simd::load(W[0]+n),vy=simd::load(W[1]+n),vz=simd::load(W[2]+n);
+            for(int n=0;n<64;n+=4){Vec rho=simd::load(U[0]+n),vx=simd::load(W[0]+n),vy=simd::load(W[1]+n),vz=simd::load(W[2]+n);
                 simd::store(pressure+n,(gamma-1)*(simd::load(U[4]+n)-.5*rho*((vx*vx+vy*vy)+vz*vz)));}
         // Cartesian derivatives map to one physical component. Write that
         // component directly, avoiding a temporary derivative round trip.
@@ -194,20 +222,20 @@ int evaluate(int64_t ne,const double* input,double* output,void** data,double ga
             if constexpr(fr_sgs::compiled_model!=fr_sgs::Model::WALE)
                 for(int c=0;c<4;++c)for(int x=0;x<3;++x)simd::store(G[c][x]+n,simd::load(G[c][x]+n)*invJ);
             Vec effective_mu,effective_kappa;
-            if constexpr(Compact){Vec measure=0.;if constexpr(Scan){if(owned)measure=geo.norm2(n);}
+            if constexpr(Compact){Vec measure=0.;if constexpr(Scan)measure=geo.norm2(n);
                 if constexpr(fr_sgs::compiled_model==fr_sgs::Model::WALE)
-                    transport_pipeline<Scan,true>(data,e,n,turbulent_pipeline,state_load<SoA>(input,count,e*64+n,0),invJ,gamma,mu,kappa,owned,effective_mu,effective_kappa,max_vis,measure);
-                else transport<Scan,Rotating,true>(data,e,n,&G[0][0][0],state_load<SoA>(input,count,e*64+n,0),invJ,gamma,mu,kappa,owned,effective_mu,effective_kappa,max_vis,measure);}
+                    transport_pipeline<Scan,true>(data,e,n,turbulent_pipeline,state_load<SoA>(input,count,e*64+n,0),invJ,gamma,mu,kappa,true,effective_mu,effective_kappa,max_vis,measure);
+                else transport<Scan,Rotating,true>(data,e,n,&G[0][0][0],state_load<SoA>(input,count,e*64+n,0),invJ,gamma,mu,kappa,true,effective_mu,effective_kappa,max_vis,measure);}
             else{
                 if constexpr(fr_sgs::compiled_model==fr_sgs::Model::WALE)
-                    transport_pipeline<Scan>(data,e,n,turbulent_pipeline,state_load<SoA>(input,count,e*64+n,0),invJ,gamma,mu,kappa,owned,effective_mu,effective_kappa,max_vis);
-                else transport<Scan,Rotating>(data,e,n,&G[0][0][0],state_load<SoA>(input,count,e*64+n,0),invJ,gamma,mu,kappa,owned,effective_mu,effective_kappa,max_vis);
+                    transport_pipeline<Scan>(data,e,n,turbulent_pipeline,state_load<SoA>(input,count,e*64+n,0),invJ,gamma,mu,kappa,true,effective_mu,effective_kappa,max_vis);
+                else transport<Scan,Rotating>(data,e,n,&G[0][0][0],state_load<SoA>(input,count,e*64+n,0),invJ,gamma,mu,kappa,true,effective_mu,effective_kappa,max_vis);
             }
             Vec div=(simd::load(G[0][0]+n)+simd::load(G[1][1]+n))+simd::load(G[2][2]+n);
             for(int x=0;x<3;++x){simd::store(fv[0][x]+n,0.);Vec energy=0.;
                 for(int c=0;c<3;++c){Vec stress=effective_mu*(simd::load(G[c][x]+n)+simd::load(G[x][c]+n)-(x==c?2./3.*div:Vec(0.)));simd::store(fv[c+1][x]+n,stress);energy=energy+simd::load(W[c]+n)*stress;}
                 Vec h=effective_kappa*simd::load(G[3][x]+n);simd::store(heat[x]+n,h);simd::store(fv[4][x]+n,energy+h);}
-            if(owned)for(int c=0;c<5;++c){Vec uc=simd::load(U[c]+n),p=simd::load(pressure+n),physical[3];
+            for(int c=0;c<5;++c){Vec uc=simd::load(U[c]+n),p=simd::load(pressure+n),physical[3];
                 for(int x=0;x<3;++x){Vec velocity=simd::load(W[x]+n);physical[x]=uc*velocity;if(c==x+1)physical[x]=physical[x]+p;if(c==4)physical[x]=physical[x]+p*velocity;physical[x]=physical[x]-reference[x][c]-simd::load(fv[c][x]+n);}
                 if constexpr(!Rect&&Mask!=511){
                     auto transform=[&](auto axis_tag){constexpr int axis=decltype(axis_tag)::value;Vec cf=0.;
@@ -232,11 +260,14 @@ int evaluate(int64_t ne,const double* input,double* output,void** data,double ga
                 if constexpr(Rect){int x=geo.physical_axis(f/2);h=geo.surface(f,x,q)*simd::trace(heat[x],f/2,q,vector);}
                 else for(int x=0;x<3;++x)h=h+geo.surface(f,x,q)*simd::trace(heat[x],f/2,q,vector);simd::store(traceV+(slot*6+5)*16+q,h);}
         }
-        if(owned){
         for(int axis=0;axis<3;++axis)for(int c=0;c<5;++c)for(int q=0;q<16;q+=4){Vec lines[4],r[4];simd::load_lines(flux[axis][c],axis,q,lines);simd::load_lines(result[c],axis,q,r);
             for(int i=0;i<4;++i)for(int j=0;j<4;++j)r[i]=r[i]+weak[i*4+j]*lines[j];simd::store_lines(result[c],axis,q,r);}
             std::copy(&result[0][0],&result[0][0]+5*64,partial+aidx*5*64);
-        }
+            for(int f=0;f<6;++f){
+                const int64_t side=routes[e*6+f];
+                if(side>0)std::copy_n(traceV+v_slot[aidx*6+f]*6*16,5*16,
+                                     shared_trace+(side-1)*5*16);
+            }
             };
             if constexpr(Compact){
                 if(compact_indices[e]<0)active_cell(std::integral_constant<int,0>{});
@@ -248,6 +279,11 @@ int evaluate(int64_t ne,const double* input,double* output,void** data,double ga
                 }
             }else active_cell(std::integral_constant<int,511>{});
         }
+        return true;
+        };
+        if(!late && !prepare())return Completion::Invalid;
+        if(!late)published[g].store(true,std::memory_order_release);
+        const bool suspend=remaining && remaining->load(std::memory_order_acquire)>1;
         auto finish=[&](int oidx,const double (*result)[64],const auto& geo){
             const int64_t e=cells[oidx];
 
@@ -262,16 +298,35 @@ int evaluate(int64_t ne,const double* input,double* output,void** data,double ga
             if(rkstage<0)state_store<SoA>(output,count,e*64+n,c,value);
             else state_store<SoA>(stage_state,count,e*64+n,c,fr_time::SSPRK43::update(state_load<SoA>(original,count,e*64+n,c),state_load<SoA>(input,count,e*64+n,c),value,dt,rkstage));}}
         };
+        bool has_pending=false;
         for(int oidx=0;oidx<no;++oidx){
             const int64_t e=cells[oidx];
+            uint8_t pending=late?pending_faces[e]:0;
+            if(late && !pending)continue;
             auto owned_cell=[&](auto tag){constexpr bool Rect=decltype(tag)::value;
             CellGeometry<Rect,511,JetAxes> geo(inverseJ,C,S,e,compact_indices,compact_constants);
-            alignas(32) double result_storage[5][64],shared_face[5][16];
-            double (*result)[64]=Shared?reinterpret_cast<double(*)[64]>(partial+oidx*5*64):result_storage;
-            if constexpr(!Shared)std::copy(partial+oidx*5*64,partial+(oidx+1)*5*64,&result[0][0]);
+            alignas(32) double shared_face[5][16];
+            double* residual=late?deferred_residuals+residual_slots[e]*5*64:partial+oidx*5*64;
+            auto result=reinterpret_cast<double(*)[64]>(residual);
             for(int f=0;f<6;++f){
-                int source=0;
-                if constexpr(Shared){source=int(face_sources[oidx*6+f]);if(source<0)continue;}
+                const uint8_t bit=1u<<f;
+                if(late && !(pending&bit))continue;
+                const int64_t route=routes[e*6+f];
+                if(suspend && route<0 && !published[producers[-route-1]].load(std::memory_order_acquire)){
+                    pending|=bit;
+                    continue;
+                }
+                const int source=int(face_sources[oidx*6+f]);
+                if(source<0)continue;
+                const int own_slot=int(u_slot[oidx*6+f]),other_slot=int(u_other[oidx*6+f]),vslot=int(v_source[oidx*6+f]);
+                double reconstructed[2*5*16];
+                if(late){
+                    const int64_t peer=neighbor[(e*6+f)*16]/16;
+                    reconstruct_state_face<SoA>(input,count,e,f,f%2?R:L,reconstructed);
+                    const int peer_face=peer%6;
+                    reconstruct_state_face<SoA>(input,count,peer/6,peer_face,peer_face%2?R:L,
+                                                reconstructed+5*16);
+                }
                 const int tag=int(tags[e*6+f]);
                 alignas(32) double acoustic[5][16]={};
                 const bool acoustic_3d=jet_characteristic_3d(tag,jet);
@@ -298,15 +353,16 @@ int evaluate(int64_t ne,const double* input,double* output,void** data,double ga
                 }
                 for(int q=0;q<16;q+=4){
                 const TracePermutation map(face_codes[(e*6+f)*4+q/4]);
-                int own_slot=int(u_slot[oidx*6+f]),other_slot=int(u_other[oidx*6+f]),vslot=int(v_source[oidx*6+f]);
                 Vec s[3],normal[3],magnitude=0.;
                 if constexpr(Rect){magnitude=geo.box[2+f/2];for(int x=0;x<3;++x){s[x]=geo.surface(f,x,q);normal[x]=x==geo.physical_axis(f/2)?Vec(f%2?1.:-1.):Vec(0.);}}
                 else{for(int x=0;x<3;++x){s[x]=geo.surface(f,x,q);magnitude=magnitude+s[x]*s[x];}
                     magnitude=simd::sqrt(magnitude);
                     for(int x=0;x<3;++x)normal[x]=s[x]/magnitude;}
             Vec um[5],up[5],wm[4],wp[4],pm,pp,am,ap;
-            for(int c=0;c<5;++c)um[c]=simd::load(traceU+(own_slot*5+c)*16+q);
-            if(!tag){for(int c=0;c<5;++c)up[c]=packed_trace(traceU,5,other_slot,map,c);}
+            const double* inside_state=late?reconstructed:traceU+own_slot*5*16;
+            for(int c=0;c<5;++c)um[c]=simd::load(inside_state+c*16+q);
+            if(!tag){for(int c=0;c<5;++c)up[c]=late?packed_trace(reconstructed,5,1,map,c):
+                                                  packed_trace(traceU,5,other_slot,map,c);}
             else {double own[5][4],n[3][4],ghost[5][4];for(int c=0;c<5;++c)simd::store(own[c],um[c]);for(int x=0;x<3;++x)simd::store(n[x],normal[x]);
                 for(int k=0;k<4;++k){double u[5],unit[3],out[5];for(int c=0;c<5;++c)u[c]=own[c][k];for(int x=0;x<3;++x)unit[x]=n[x][k];
                     const double* ff=far;if constexpr(Rotating)ff=(const double*)data[24]+(boundary_index[e*6+f]*16+q+k)*5;
@@ -322,11 +378,12 @@ int evaluate(int64_t ne,const double* input,double* output,void** data,double ga
             else for(int x=0;x<3;++x){unm=unm+wm[x]*normal[x];unp=unp+wp[x]*normal[x];}
             Vec speed=simd::maximum(simd::abs(unm)+am,simd::abs(unp)+ap);
             for(int c=0;c<5;++c){Vec fm=um[c]*unm,fp=up[c]*unp;if(c>0&&c<4){fm=fm+pm*normal[c-1];fp=fp+pp*normal[c-1];}if(c==4){fm=fm+pm*unm;fp=fp+pp*unp;}
-                Vec visc=(!tag&&choose[e*6+f])?-1.*packed_trace(traceV,6,vslot,map,c):simd::load(traceV+(vslot*6+c)*16+q);
+                Vec visc=route<0?-1.*packed_trace(shared_trace,5,-route-1,map,c):
+                    (!tag&&choose[e*6+f])?-1.*packed_trace(traceV,6,vslot,map,c):simd::load(traceV+(vslot*6+c)*16+q);
                 if(tag==1&&c==4)visc=wall_temperature<0?Vec(0.):simd::load(traceV+(vslot*6+5)*16+q);
                 Vec common=magnitude*(.5*(fm+fp)-.5*speed*(up[c]-um[c]))-visc;
                 if(acoustic_face)common=common+magnitude*simd::load(acoustic[c]+q);
-                if constexpr(Shared){if(source>0)simd::store(shared_face[c]+q,common);}
+                if(source>0)simd::store(shared_face[c]+q,common);
                 if(tag){int64_t b=boundary_index[e*6+f];state_store<false>(boundary_flux,0,b*16+q,c,common);
                     simd::store(boundaryU+(b*5+c)*16+q,um[c]);simd::store(boundaryV+(b*6+c)*16+q,simd::load(traceV+(vslot*6+c)*16+q));}
                 for(int x=0;x<3;++x)common=common-s[x]*reference[x][c];
@@ -334,7 +391,7 @@ int evaluate(int64_t ne,const double* input,double* output,void** data,double ga
             }
             if(tag)simd::store(boundaryV+(boundary_index[e*6+f]*6+5)*16+q,simd::load(traceV+(vslot*6+5)*16+q));
                 }
-                if constexpr(Shared){if(source>0){
+                if(source>0){
                     // Both cells belong to this worker. Accumulate the same
                     // flux into both local residuals immediately, without a
                     // group-wide face cache or any neighboring-group writes.
@@ -350,16 +407,28 @@ int evaluate(int64_t ne,const double* input,double* output,void** data,double ga
                         for(int i=0;i<4;++i)line[i]=line[i]-(ff%2?gr[i]:-gl[i])*common;
                         simd::store_lines(other_result[c],ff/2,q,line);
                     }
-                }}
+                }
             }
-        if constexpr(!Shared)finish(oidx,result,geo);
             };
             if constexpr(Compact){if(compact_indices[e]<0)owned_cell(std::true_type{});else owned_cell(std::false_type{});}
             else owned_cell(std::false_type{});
+            if(!late)pending_faces[e]=pending;
+            has_pending|=pending!=0;
         }
-        if constexpr(Shared)for(int oidx=0;oidx<no;++oidx){
+        for(int oidx=0;oidx<no;++oidx){
             const int64_t e=cells[oidx];
-            const auto result=reinterpret_cast<const double(*)[64]>(partial+oidx*5*64);
+            const auto pending=residual_slots[e];
+            double* residual=partial+oidx*5*64;
+            const bool waits=pending_faces[e]!=0;
+            if(!late && waits){
+                std::copy_n(residual,5*64,deferred_residuals+pending*5*64);
+                continue;
+            }
+            if(late){
+                if(!waits)continue;
+                residual=deferred_residuals+pending*5*64;
+            }
+            const auto result=reinterpret_cast<const double(*)[64]>(residual);
             if constexpr(Compact){
                 if(compact_indices[e]<0){
                     CellGeometry<true,511,JetAxes> geo(inverseJ,C,S,e,compact_indices,compact_constants);
@@ -370,11 +439,34 @@ int evaluate(int64_t ne,const double* input,double* output,void** data,double ga
             CellGeometry<false> geo(inverseJ,C,S,e,compact_indices,compact_constants);
             finish(oidx,result,geo);
         }
+        return has_pending?Completion::Suspended:Completion::Finished;
+    };
+    const auto reader_offsets=static_cast<const int64_t*>(plan[24]);
+    const auto readers=static_cast<const int64_t*>(plan[25]);
+    const auto waits=static_cast<const int64_t*>(plan[26]);
+    const auto group_order=static_cast<const int64_t*>(plan[30]);
+    std::vector<std::atomic<int64_t>> remaining(sizes[0]);
+    std::vector<uint8_t> deferred(sizes[0]);
+    for(int g=0;g<sizes[0];++g)remaining[g].store(waits[g]+1,std::memory_order_relaxed);
+    #pragma omp parallel for num_threads(threads) schedule(runtime) reduction(|:invalid) reduction(max:max_adv,max_vis)
+    for(int position=0;position<sizes[0];++position){
+        const int g=group_order[position];
+        // The last arrival sees the saved residual and all remote traces.
+        auto arrive=[&](int64_t reader){
+            if(remaining[reader].fetch_sub(1,std::memory_order_acq_rel)==1 && deferred[reader])
+                run_group(reader,true,nullptr,invalid,max_adv,max_vis);
+        };
+        const auto status=run_group(g,false,&remaining[g],invalid,max_adv,max_vis);
+        if(status==Completion::Invalid)continue;
+        deferred[g]=status==Completion::Suspended;
+        arrive(g);
+        for(int64_t link=reader_offsets[g];link<reader_offsets[g+1];++link)
+            arrive(readers[link]);
     }
     omp_set_schedule(old_schedule,old_chunk);
     timing[0]=omp_get_wtime()-mark;timing[1]=timing[2]=0.;
     if constexpr(Scan){scan[0]=max_adv;scan[1]=max_vis;}
     return invalid?1:0;
 }
-}
 
+}

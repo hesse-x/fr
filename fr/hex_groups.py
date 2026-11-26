@@ -56,15 +56,14 @@ def cartesian_cell_indices(mesh,lines,selected):
 class HexGroups:
     """One owner per cell; halo work never changes the numerical face rule.
 
-    Active halo cells supply a dual viscous trace. A second, pruned primitive
-    halo supplies the alternating primal traces needed for their gradients.
-    Only required face traces are packed, not six full traces for every halo.
+    Neighbor halos supply the conserved and primal traces. Groups compute
+    gradients only for owned cells and publish the required dual viscous traces.
     Optional spatial_mask selects cells grouped into physical bins of the given
     spatial_width, across block boundaries; other cells retain logical tiles.
     index_coordinates uses global integer lattice indices instead of physical
-    widths. shared_faces pairs owned faces for immediate two-sided local lifts.
+    widths. Owned face pairs support immediate two-sided local lifts.
     """
-    def __init__(self,geometry,tile=(4,4,4),*,reorder=True,spatial_mask=None,spatial_width=None,index_coordinates=None,shared_faces=False):
+    def __init__(self,geometry,tile=(4,4,4),*,reorder=True,spatial_mask=None,spatial_width=None,index_coordinates=None):
         if len(tile)!=3 or any(not isinstance(n,int) or n<1 for n in tile):
             raise ValueError('three positive integer tile dimensions required')
         original=geometry
@@ -126,7 +125,7 @@ class HexGroups:
         self.geometry=s;self.original_geometry=original;self.tile=tuple(tile)
         # Flattened per-group records use offsets, avoiding Python in hot loops.
         pids=[];uslots=[];wslots=[];vslots=[];wnb=[];unb=[];vsrc=[];records=[]
-        start=0;max_scratch=0;active_total=primitive_total=0
+        max_scratch=primitive_total=0
         shared_sources=[];shared_peers=[];owned_offsets=[0];internal_faces=0
         masks=s.primal_inside.astype(bool);tags=s.tags;neighbor=s.face_neighbor
         def slots(cells,selected):
@@ -136,55 +135,51 @@ class HexGroups:
                 for f in range(6):arr[i,f]=lookup.get(int(e*6+f),-1)
             return arr,lookup
         for old_owner in owners:
-            no=len(old_owner);owned=self.inverse[old_owner];start+=no
+            no=len(old_owner);owned=self.inverse[old_owner]
             own_faces=owned[:,None]*6+np.arange(6)
-            needs_neighbor=(tags[owned]==0)&masks[owned]
-            extra=neighbor[owned][needs_neighbor]//6
-            active=np.r_[owned,np.setdiff1d(extra,owned)]
-            na=len(active)
-            afaces=active[:,None]*6+np.arange(6)
-            needs_primal=(tags[active]==0)&~masks[active]
-            extra_p=neighbor[active][needs_primal]//6
-            primitive=np.r_[active,np.setdiff1d(extra_p,active)]
+            other=neighbor[owned]
+            interior=tags[owned]==0
+            needs_neighbor=interior&masks[owned]
+            needs_primal=interior&~masks[owned]
+            primitive=np.r_[owned,np.setdiff1d(other[interior]//6,owned)]
             np_=len(primitive)
-            selected_u=np.unique(np.r_[own_faces.ravel(),neighbor[owned][tags[owned]==0]])
-            selected_w=np.unique(np.r_[afaces[(tags[active]>0)|~masks[active]],neighbor[active][needs_primal]])
-            selected_v=np.unique(np.where(needs_neighbor,neighbor[owned],own_faces))
+            selected_u=np.unique(np.r_[own_faces.ravel(),other[interior]])
+            selected_w=np.unique(np.r_[own_faces[~needs_neighbor],other[needs_primal]])
+            local_v=~needs_neighbor|np.isin(other//6,owned)
+            sources=np.where(needs_neighbor,other,own_faces)
+            selected_v=np.unique(sources[local_v])
             u,ulookup=slots(primitive,selected_u)
             w,wlookup=slots(primitive,selected_w)
-            v,vlookup=slots(active,selected_v)
-            wn=np.full((na,6),-1,dtype=np.int64)
-            for i,e in enumerate(active):
-                for f in range(6):
-                    if needs_primal[i,f]:wn[i,f]=wlookup[int(neighbor[e,f])]
-            un=np.full((no,6),-1,dtype=np.int64);vs=np.empty((no,6),dtype=np.int64)
+            v,vlookup=slots(owned,selected_v)
+            wn=np.full((no,6),-1,dtype=np.int64)
+            un=np.full((no,6),-1,dtype=np.int64);vs=np.full((no,6),-1,dtype=np.int64)
             for i,e in enumerate(owned):
                 for f in range(6):
-                    if tags[e,f]==0:un[i,f]=ulookup[int(neighbor[e,f])]
-                    source=neighbor[e,f] if needs_neighbor[i,f] else e*6+f
-                    vs[i,f]=vlookup[int(source)]
+                    if needs_primal[i,f]:wn[i,f]=wlookup[int(other[i,f])]
+                    if interior[i,f]:un[i,f]=ulookup[int(other[i,f])]
+                    if local_v[i,f]:vs[i,f]=vlookup[int(sources[i,f])]
             nu,nw,nv=len(selected_u),len(selected_w),len(selected_v)
             pair_sources=np.zeros((no,6),dtype=np.int64);pair_peers=np.full((no,6),-1,dtype=np.int64);pairs={}
             positions={int(e):i for i,e in enumerate(owned)}
             for i,e in enumerate(owned):
                 for f in range(6):
                     if tags[e,f]:continue
-                    other=int(neighbor[e,f]);j=positions.get(other//6)
+                    peer=int(neighbor[e,f]);j=positions.get(peer//6)
                     if j is None:continue
-                    key=tuple(sorted((int(e*6+f),other)))
+                    key=tuple(sorted((int(e*6+f),peer)))
                     slot=pairs.setdefault(key,len(pairs))+1
-                    pair_sources[i,f]=slot if (i,f)<(j,other%6) else -slot
-                    pair_peers[i,f]=j*6+other%6
+                    pair_sources[i,f]=slot if (i,f)<(j,peer%6) else -slot
+                    pair_peers[i,f]=j*6+peer%6
             shared_sources.extend(pair_sources.ravel().tolist());owned_offsets.append(owned_offsets[-1]+no)
             shared_peers.extend(pair_peers.ravel().tolist())
             internal_faces+=len(pairs)
-            # W nodes for active cells, U nodes for owned cells, compact face
+            # W and U nodes for owned cells, compact face
             # traces, and owned residuals. Per-element scratch is on the stack.
-            scratch=na*4*64+no*5*64+nu*5*16+nw*4*16+nv*6*16+no*5*64
-            records.append([no,na,np_,nu,nw,nv,len(pids),len(uslots),len(wslots),len(vslots),len(wnb),len(unb),len(vsrc),scratch])
+            scratch=no*14*64+nu*5*16+nw*4*16+nv*6*16
+            records.append([no,np_,nu,nw,nv,len(pids),len(uslots),len(wslots),len(vslots),len(wnb),len(unb),len(vsrc),scratch])
             pids.extend(primitive.tolist());uslots.extend(u.ravel().tolist());wslots.extend(w.ravel().tolist())
             vslots.extend(v.ravel().tolist());wnb.extend(wn.ravel().tolist());unb.extend(un.ravel().tolist());vsrc.extend(vs.ravel().tolist())
-            max_scratch=max(max_scratch,scratch);active_total+=na;primitive_total+=np_
+            max_scratch=max(max_scratch,scratch);primitive_total+=np_
         self.records=np.asarray(records,dtype=np.int64)
         self.arrays=[self.records]+[np.asarray(v,dtype=np.int64) for v in (pids,uslots,wslots,vslots,wnb,unb,vsrc)]
         self.max_scratch_doubles=int(max_scratch)
@@ -192,16 +187,14 @@ class HexGroups:
         self.shared_peers=np.asarray(shared_peers,dtype=np.int64)
         self.owned_offsets=np.asarray(owned_offsets,dtype=np.int64)
         self.metadata=dict(tile=list(tile),groups=len(records),owned_cells=original.ne,
-            active_cells_with_repetition=active_total,primitive_cells_with_repetition=primitive_total,
-            active_work_ratio=active_total/original.ne,primitive_work_ratio=primitive_total/original.ne,
+            primitive_cells_with_repetition=primitive_total,primitive_work_ratio=primitive_total/original.ne,
             scratch_bytes_per_worker=int(max_scratch*8),
             scratch_bytes_percentiles=np.percentile(self.records[:,-1]*8,[0,50,95,100]).tolist(),
             plan_bytes=sum(a.nbytes for a in self.arrays)+self.shared_sources.nbytes+self.shared_peers.nbytes+self.owned_offsets.nbytes,reordered=bool(reorder),
             ordering='logical spatial tiles; owned cells contiguous' if reorder else 'logical spatial tiles; original storage',
             internal_group_faces=internal_faces,external_group_face_sides=original.ne*6-2*internal_faces,
-            numerical_flux_evaluations_per_rhs=original.ne*6-(internal_faces if shared_faces else 0),
-            shared_numerical_flux_computed_once=bool(shared_faces))
-        self.metadata['shared_numerical_flux_scope']='group interiors only' if shared_faces else 'none'
+            numerical_flux_evaluations_per_rhs=original.ne*6-internal_faces,
+            shared_numerical_flux_computed_once=True,shared_numerical_flux_scope='group interiors only')
         if mask is not None:
             ends=np.cumsum([int(np.prod(np.array(b.shape)-1)) for b in original.mesh.blocks])
             crossing=sum(len(np.unique(np.searchsorted(ends,o,side='right')))>1 for o in spatial_owners)
