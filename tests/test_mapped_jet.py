@@ -47,12 +47,13 @@ class MappedJetTests(unittest.TestCase):
                            {(2,1):'inlet', (2,2):'outlet', (2,3):'ambient'})
 
     def test_affine_mapped_rhs_and_rk_match_cartesian(self):
-        edges = build_mesh((2, 2, 2), length=2., half_width=1.,
+        shape = (5, 2, 2)
+        edges = build_mesh(shape, length=2., half_width=1.,
                            axial_stretch=0., transverse_stretch=0.)
         model = RoundJetLES(edges, outlet='nscbc', modal_filter='none')
         geometry = self.geometry(edges)
         native = MappedJetStepper(
-            geometry, [(2,2,2)], eq=model.eq, pressure=model.pressure,
+            geometry, [shape], eq=model.eq, pressure=model.pressure,
             shear_width=model.shear_width, disturbance=model.disturbance, nozzle_radius=NOZZLE_RADIUS,
             outlet='nscbc', threads=1, group_packet=2, modal_filter=False)
         x, y, z = model.s.coords
@@ -101,6 +102,36 @@ class MappedJetTests(unittest.TestCase):
         torch.testing.assert_close(*residuals, atol=2e-9, rtol=1e-9)
         torch.testing.assert_close(*advanced, atol=2e-10, rtol=1e-10)
         np.testing.assert_allclose(*steps, atol=1e-13, rtol=1e-11)
+
+    def test_shared_interfaces_match_across_group_schedules(self):
+        with TemporaryDirectory() as directory:
+            path = Path(directory)/'mesh.msh'
+            write_mesh(path, np.linspace(0., 2., 10))
+            model = MappedRoundJetLES(path, reynolds=6e5, mach=.5, shear_width=.12,
+                                     disturbance=0., modal_filter='none', outlet='nscbc-3d-open')
+        kwargs = dict(eq=model.eq, pressure=model.pressure, shear_width=model.shear_width,
+                      disturbance=0., nozzle_radius=NOZZLE_RADIUS, outlet=model.outlet,
+                      threads=2, modal_filter=False, split_geometry=True)
+        baseline = MappedJetStepper(model.mesh, model.block_shapes, group_packet=0, **kwargs)
+        default = MappedJetStepper(model.mesh, model.block_shapes, **kwargs)
+        self.assertTrue((default.plan[21] < 0).any())
+        self.assertEqual(int(default.plan[13][4]), 8)
+        np.testing.assert_array_equal(np.sort(default.plan[30]), np.arange(len(default.plan[0])))
+        x, y, z = model.mesh.volume_metrics(cells=default.order.tolist()).coordinates.unbind(-1)
+        velocity = torch.stack((.1*y.cos(), .04*(x+z).sin(), .03*y.sin()), dim=-1)
+        state = model.soa(model.eq.conservative(1.+.01*x.cos(), velocity,
+                                                model.pressure+.02*(x+y+z).sin()))
+        t, dt = .25, 1e-4
+        outputs = [torch.empty_like(state), torch.empty_like(state)]
+        invalid = state.clone()
+        invalid[np.argwhere(default.plan[21] > 0)[0, 0], ..., 0] = -1.
+        self.assertFalse(default.scan(invalid, 1.6, t=t)[0])
+        for solver, out in zip((baseline, default), outputs):
+            self.assertTrue(solver.scan(state, 1.6, t=t)[0])
+            self.assertTrue(solver.advance_finish(state, t, dt, 1.6, out=out)[1])
+            self.assertTrue(solver.scan(state, 1.6, t=t)[0])
+        torch.testing.assert_close(baseline._rhs_buffer, default._rhs_buffer, atol=2e-9, rtol=1e-9)
+        torch.testing.assert_close(*outputs, atol=2e-10, rtol=1e-10)
 
     def test_filter_step_limit_requests_retry_and_leaves_input_unchanged(self):
         grid = build_mesh((2, 2, 2), length=2., half_width=1., axial_stretch=0., transverse_stretch=0.)

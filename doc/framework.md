@@ -395,6 +395,12 @@ viscous_rhs = ldg.diffusion(U, t, constitutive=viscous_flux)
 
 `HexGeometry.read` 与二维求解器共用 ASCII MSH 解析，面向完整的二次曲边六面体（hex27）和边界四边形（quad9）。它计算高斯解点上的坐标、雅可比及逆变面积度量，返回朝外的面面积向量，并给出共形共享面的邻居及 Gauss 点重排。圆射流的 `native-hex-p3` 使用这些几何数据做原生分组 FR/LDG、WALE 和 SSPRK(4,3) 推进。
 
+圆射流六面体内核按组间共享面数安排 OpenMP 批次，默认每批 8 个组。每组只为自有单元计算 LDG 梯度，并发布邻组所需的黏性 trace。面数据就绪时立即完成面修正。尚缺数据的单元只暂存残差和待修正面掩码，收尾时从只读 RK 输入重插值两侧守恒变量。组内共享面一次求通量并同时修正两侧。
+
+从仓库根目录运行 `python -m case.round_jet_les.benchmark_interfaces <checkpoint.pt> --threads 8` 测量默认内核。网格默认取检查点同目录的 `mesh.msh`。基准报告九次测量的中位数和下一步步长扫描的挂起面数。稳态单步耗时包含下一步的步长扫描，可用 `--group-packet` 调整 OpenMP 批次大小。
+
+默认内核在 Round Jet SP3 的 `tanh_width=0.08D` 第 300000 步检查点上实测 **83.70 ms/步**。网格有 28224 个六面体，`p=3`，`dt=0.003047290971`，开启 WALE 和模态滤波。i7-14700 绑 8 个 P 核，每批 8 组。组间 trace 和暂存残差的缓冲区共 56.8 MiB。开发时同一检查点的组合版与旧融合内核的单步最大绝对差为 2.665e-15。
+
 #### 离散方法
 
 依据 [Castonguay–Vincent–Jameson 的三角形 FR 论文](<A New Class of High-Order Energy Stable Flux Reconstruction Schemes for Triangular Elements.pdf>) 第 5.4 节，首先采用 VCJH 的 **c=0，即 DG 成员**。三角形使用完整 `P_p` 多项式空间，四边形使用张量积 `Q_p`。`p=3` 时每个三角形为 10 个自由度，每个四边形为 16 个自由度；面上积分点数另行确定。

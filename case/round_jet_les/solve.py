@@ -10,6 +10,7 @@ import torch
 from fr import CartesianMesh
 from fr.les import CartesianLESMixin
 from fr.modal_filter import CartesianModalFilter
+from fr.native.mapped_jet import MAPPED_GROUP_PACKET
 from fr.navier_stokes import CartesianNavierStokes
 
 from .generate_mesh import NOZZLE_RADIUS, build_mesh
@@ -173,9 +174,9 @@ def run(model, output, *, final_time, cfl, sample_from, sample_interval,
     output = Path(output)
     output.mkdir(parents=True, exist_ok=True)
     checkpoint = output/'checkpoint.pt'
-    if group_packet is None:
-        group_packet = 2 if backend in ('native-p3', 'native-hex-p3') else 0
     mapped = backend == 'native-hex-p3'
+    if group_packet is None:
+        group_packet = MAPPED_GROUP_PACKET if mapped else (2 if backend == 'native-p3' else 0)
     if slice_every < 0 or (slice_every and not mapped):
         raise ValueError('periodic diameter slices require the mapped cylindrical jet')
     if fwh_surface is not None and not mapped:
@@ -401,7 +402,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, parents=[mesh_options])
     parser.add_argument('--output', type=Path, default=Path('results/round_jet_les/near_field'))
     parser.add_argument('--p', type=int, default=3)
-    parser.add_argument('--group-packet', type=int, help='native groups per dynamic packet (default 2, 0 for static)')
+    parser.add_argument('--group-packet', type=int,
+                        help=f'native groups per packet ({MAPPED_GROUP_PACKET} for hex, 2 for Cartesian, 0 for static)')
     parser.add_argument('--reynolds', type=float, default=6e5)
     parser.add_argument('--mach', type=float, default=.5)
     parser.add_argument('--shear-width', type=float, default=.12)

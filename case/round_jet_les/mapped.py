@@ -8,7 +8,7 @@ import numpy as np
 import torch
 
 from fr import HexGeometry, NavierStokes
-from fr.native.mapped_jet import MappedJetStepper
+from fr.native.mapped_jet import MAPPED_GROUP_PACKET, MappedJetStepper
 from fr.operators import operators
 
 from .generate_mesh import NOZZLE_RADIUS
@@ -144,7 +144,7 @@ class MappedRoundJetLES:
                     mesh_cell_order=torch.from_numpy(self.stepper.order),
                     blocks=self.block_shapes)
 
-    def make_stepper(self, backend, *, group_packet):
+    def make_stepper(self, backend, *, group_packet=MAPPED_GROUP_PACKET):
         if backend != 'native-hex-p3':
             raise ValueError('the cylindrical jet requires native-hex-p3')
         self.stepper = MappedJetStepper(

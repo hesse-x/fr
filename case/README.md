@@ -34,6 +34,7 @@ case/<name>/
 | `quantum_double_slit` | 二维概率密度和远场角分布 | 量子双缝波包散射与论文结果对照 |
 | `mie_cylinder` | 瞬时散射 Ez，以及采样所得散射 Ez 相量幅值 | 瞬时散射 Ez 从启动到结束的演化 |
 | `cylinder_flow` | 二维圆柱绕流涡量 | 全局物理时间推进的脱涡过程，见[运行参数](cylinder_flow/README.md) |
+| `round_jet_rans` | 圆射流平均轴向速度、中心线速度和半速度半径 | 定常问题，不生成动画 |
 
 ```bash
 # 定常算例：最后一步的 PNG

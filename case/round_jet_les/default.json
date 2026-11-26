@@ -83,7 +83,7 @@
     "p": 3,
     "cfl": 1.6,
     "threads": 8,
-    "group_packet": 2,
+    "group_packet": 8,
     "reynolds": 600000.0,
     "mach": 0.5,
     "shear_width": 0.12,

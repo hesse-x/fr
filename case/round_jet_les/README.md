@@ -2,6 +2,41 @@
 
 算例计算静止环境中的三维圆射流近场，以 [SMC000 SP3](https://aiaa-jnpw.github.io/aiaa-jnpw/cases/) 为目标工况。计算域从喷口出口开始，圆形速度入口的半径为 `0.5D`。
 
+## 25D 圆柱域结果与 SP3 实验
+
+三组 LES 使用同一套长 `25D`、半径 `10D` 的 28,224 单元圆柱网格，`Re_D=600000`、`Ma=0.5`、`p=3`、`CFL=1.6`，采用 WALE、`nscbc-3d-ambient` 和轴对称层流近似初场。入口持续扰动均为零。`0.08D` 和 `0.10D` 两组只改入口 `tanh` 宽度，均未施加人工扰动。`0.12D` 组在第 6,000 步施加一次峰值为 `0.005 Uj` 的横向扰动，也会影响剪切层发展。
+
+| 入口 `tanh` 宽度 | 等权统计步数区间 | 统计时长 `Δt Uj/D` |
+| --- | --- | ---: |
+| `0.08D` | 200,001–300,000 | 381.907 |
+| `0.10D` | 200,001–300,000 | 386.827 |
+| `0.12D` | 200,001–300,023 | 391.034 |
+
+### 平均中心线速度与射流扩展
+
+![三种入口宽度的 LES 平均中心线速度与 NASA SP3 共识 PIV](figures/mean_centerline_velocity_vs_nasa_sp3_tanh_width_comparison.png)
+
+| 指标 | `0.08D` | `0.10D` | `0.12D` | NASA SP3 |
+| --- | ---: | ---: | ---: | ---: |
+| 势核末端 `x/D`（首次达到 `Uc/Uj = 0.95`） | 7.39 | 8.20 | 8.98 | 7.10 |
+| `Uc/Uj`，`x/D = 10` | 0.723 | 0.793 | 0.871 | 0.774 |
+| `Uc/Uj`，`x/D = 12` | 0.587 | 0.634 | 0.684 | 0.656 |
+| `Uc/Uj`，`x/D = 20` | 0.342 | 0.335 | 0.367 | 0.383 |
+| 半速度半径 `r₁/₂/D`，`x/D = 10` | 0.735 | 0.659 | 0.593 | 0.743 |
+| 中心线速度平均绝对相对误差，`1D–25D` | 6.96% | 6.82% | 4.85% | — |
+
+从 `0.08D` 加宽到 `0.10D`，势核延长 `0.81D`，`10D` 处速度升高、半宽减小。`0.08D` 的势核和 `10D` 半宽最接近实验，`0.10D` 的中心线速度在 `10D` 和 `12D` 更接近实验。`0.12D` 的中心线全段误差最小，势核也最长。三组在 `20D` 的中心线速度均低于实验，且不再随入口宽度单调变化。中心线误差用 `1D–25D` 内 241 个共同 PIV 测点计算，按当地 PIV 速度归一化。[中心线速度数据](validation/centerline_vs_sp3.csv) · [半宽数据](validation/half_velocity_radius_vs_sp3.csv)
+
+### 径向自相似与瞬时截面
+
+| 入口宽度 | 自相似剖面 | `10D–20D` 归一化速度最大差值 | 第 300,000 步的 `z=0` 瞬时轴向速度 |
+| --- | --- | ---: | --- |
+| `0.08D` | [径向剖面](figures/azimuthal_mean_similarity_tanh_008D.png) | 0.023 | [截面](figures/axial_velocity_z0_step300000_tanh_008D.png)，`t Uj/D=1138.585` |
+| `0.10D` | [径向剖面](figures/azimuthal_mean_similarity_tanh_010D.png) | 0.050 | — |
+| `0.12D` | [径向剖面](figures/azimuthal_mean_similarity_10D_20D_with_1D_24D.png) | 0.029 | [截面](figures/axial_velocity_z0_step300000.png)，`t Uj/D=1175.051` |
+
+自相似图使用方位平均速度，以当地中心线速度和半速度半径归一化。表内最大差值在 `0.25 ≤ r/r₁/₂ ≤ 2` 上逐半径比较。`0.08D` 的剖面从约 `8D` 开始重合，`0.10D` 在 `15D–20D` 的最大差值降至 0.023。瞬时截面采用相同色标，`0.12D` 的连续高速带更长，`0.08D` 的剪切层起伏更早出现。[径向统计数据](validation/velocity_similarity.csv) · [与 RANS 的对照](../round_jet_rans/README.md)
+
 ## 近场求解
 
 默认初场从圆形 tanh 喷口剖面构造。轴向速度求解常速对流与圆截面层流黏性扩散，径向速度由连续性给出，压力和密度设为环境值。这是轴对称层流对流–扩散近似。入口使用已完成启动的喷口剖面，扰动幅度默认为零。开放边界默认采用 `nscbc-3d-ambient`，允许环境卷吸。黏性梯度在入口使用带喷口窗函数的原始变量边界值，其余面使用内部迹。
@@ -31,7 +66,7 @@ python -m case.round_jet_les.generate_tanh_mesh
 可生成启动段剖面，历史示例位于 `results/round_jet_les/native_p3_cfl16_t2/`。
 这段短算例展示发展中的近场，时间窗口为 `t Uj/D=1.5–2`。
 
-## 实验对比
+## 统计与实验后处理
 
 参考数据采用 [NASA SP3 共识 PIV](https://ntrs.nasa.gov/citations/20110023688)。该工况按环境声速定义的入口马赫数为 0.50。近场发展对入口剪切层和扰动设置敏感。
 
@@ -57,15 +92,22 @@ python -m case.round_jet_les.compare \
 
 `piv_centerline.csv` 给出中心线平均轴向速度和半速度半径。`piv_radial_profiles.csv` 给出 `x/D=1, 2, 5, 8, 10, 12` 的平均轴向速度。实验剖面取 PIV 中心面两侧的平均，LES 剖面采用方位角平均。半速度半径为速度降至当地中心线值一半的半径。PIV 速度按实验理想喷速归一化，LES 按设定喷速归一化。`piv_comparison.png` 汇总上述曲线。
 
-### 25D 圆柱域的 300,000 步结果
+### 25D 圆柱域结果复现
 
-本次使用 28,224 单元网格、`Re_D=600000`、`Ma=0.5`、`p=3`、`CFL=1.6`、WALE 和 `nscbc-3d-ambient`。由轴对称层流近似场启动，在第 6,000 步对 `x/D=3–9` 的剪切层加入一次峰值为 `0.005 Uj` 的横向速度扰动，入口持续扰动幅度为零。最终统计第 200,001 到 300,000 步的 100,000 个等权样本，统计时间跨度为 `390.943 D/Uj`。
+`0.08D` 和 `0.10D` 从默认层流近似初场启动。用下列参数运行两组计算，并与 SP3 数据配对。
 
-- [周向平均速度的自相似剖面](figures/azimuthal_mean_similarity_10D_20D_with_1D_24D.png) 来自 `field_statistics.pt`。每个半径用 192 个等角度点做周向平均。横轴为 `r/r₁/₂(x)`，纵轴为当地中心线速度归一化的平均轴向速度。比较 `10D–20D` 每隔一倍直径的剖面及 `1D`、`24D` 两条参照曲线。
-- [平均中心线速度与 NASA SP3 对比](figures/mean_centerline_velocity_vs_nasa_sp3.png) 来自 `centerline.csv` 和 SP3 共识 PIV。相对偏差按实验均值归一化。在 `1D–25D` 的实验位置上，平均绝对相对误差为 4.85%。
-- [300,000 步瞬时轴向速度截面](figures/axial_velocity_z0_step300000.png) 是 `z=0` 平面上的 `uₓ/Uj`，时间为 `t Uj/D=1175.051`。由 `--slice-every 10000` 随求解自动输出。
+```bash
+for width in 0.08 0.10; do
+  run="results/round_jet_les/sp3_tanh_width${width#0.}_300k_repro"
+  bash case/round_jet_les/run.sh --output "$run" --shear-width "$width" \
+    --sample-from-step 200000 --sample-max-steps 1 --sample-weighting step \
+    --full-field-statistics --max-steps 300000 --slice-every 10000
+  python -m case.round_jet_les.compare "$run" \
+    results/round_jet_les/reference/consensus1.zip --expected-steps 300000
+done
+```
 
-可用以下命令从发展阶段的检查点接入等权统计，并导出 SP3 对照数据。
+`0.12D` 的原 300,000 步结果从已在第 6,000 步施加横向扰动的检查点续算。下列命令从发展阶段接入等权统计，产生瞬时截面和原 300,000 步对照。[原中心线对比图](figures/mean_centerline_velocity_vs_nasa_sp3.png) · [0.08D 中心线对比图](figures/mean_centerline_velocity_vs_nasa_sp3_tanh_008D.png)
 
 ```bash
 bash case/round_jet_les/run.sh --resume --reset-samples \
@@ -75,6 +117,31 @@ bash case/round_jet_les/run.sh --resume --reset-samples \
 python -m case.round_jet_les.compare \
   results/round_jet_les/sp3_cylindrical_25d_tanh_r10_theta36_radial10_ambient_laminar \
   results/round_jet_les/reference/consensus1.zip --expected-steps 300000
+```
+
+综合对比图采用恢复至第 300,023 步的 `0.12D` 平均场，比原对比图多 23 个等权样本。自相似图使用 `field_statistics.pt`，在整数 `x/D` 截面按 `Δr=0.02D` 取样，每个半径用 192 个等角度点做周向平均，再用线性插值找半速位置。
+
+### RANS 验证用对比数据
+
+`validation/` 保留三组 SMC000 LES 的最终平均结果与 NASA SP3 共识 PIV 的配对数据。列名前缀 `les_008`、`les_010`、`les_012` 和 `sp3` 分别对应三种入口 tanh 宽度和实验。后缀 `_Uj`、`_Uj2` 表示按喷速或喷速平方归一化。PIV 使用实验理想喷速，LES 使用设定喷速。
+
+| 数据 | 内容 |
+| --- | --- |
+| [中心线速度和湍流统计](validation/centerline_vs_sp3.csv) | 在 `1D–25D` 的 PIV 测点比较平均轴向速度、湍动能和轴向速度脉动 RMS。 |
+| [半速度半径](validation/half_velocity_radius_vs_sp3.csv) | 每隔 `1D` 比较 `r₁/₂/D`。PIV 径向覆盖只能在整数测站上确定到 `18D`，缺失值记为 `nan`。 |
+| [径向速度和雷诺应力](validation/radial_profiles_vs_sp3.csv) | 在 `x/D=5, 8, 10, 12, 16, 18` 的有效 PIV 半径上比较平均轴向和径向速度、湍动能、轴向–径向雷诺协方差 `uxur_Uj2` 和轴向速度脉动 RMS。 |
+| [自相似剖面](validation/velocity_similarity.csv) | 每隔 `1D` 导出三组 LES 以当地中心线速度和半速度半径归一化的轴向速度。 |
+| [截面通量诊断](validation/section_flux_diagnostics.csv) | 每隔 `1D` 对 `r≤5D` 的三组 LES 积分。包含平均密度与平均速度的质量通量、平均流轴向动量通量，以及加上解析尺度轴向速度方差后的对流动量近似。 |
+
+LES 径向数据用 192 个等角度点做周向平均，PIV 用中心面两侧折叠平均。径向速度和轴向–径向雷诺协方差先转换为向外的径向分量，再做平均。湍动能取三个法向速度方差之和的一半，LES 列只含解析尺度。截面质量通量以 `ρ∞ Uj D²` 归一化，动量通量以 `ρ∞ Uj² D²` 归一化。积分只用导出的平均密度、平均速度和解析尺度轴向速度方差，完整的轴向动量收支还需计入密度波动关联、压力、应力及侧边界通量。
+
+从三组平均场和 SP3 共识数据重新导出这些小表，可在仓库根目录运行以下命令。
+
+```bash
+python -m case.round_jet_les.export_validation results/round_jet_les/reference/consensus1.zip \
+  --width-008 results/round_jet_les/sp3_tanh_width008_100k \
+  --width-010 results/round_jet_les/sp3_tanh_width010_300k \
+  --width-012 results/round_jet_les/sp3_tanh_width012_300023_recovered
 ```
 
 ### 三维 FW–H 面采样
@@ -155,6 +222,8 @@ python -m case.round_jet_les.generate_cylindrical_mesh
 
 生成器调用 Gmsh，默认输出 `results/round_jet_les/sp3_cylindrical_40d/mesh.geo` 和 ASCII MSH 2.2 网格 `mesh.msh`。`fr.HexGeometry.read` 读取网格并预计算解点度量、面面积向量和相邻面点的排列。`native-hex-p3` 在初始化时计算固定网格的雅可比倒数，用 C++ AVX2 分组内核推进 Rusanov、LDG、WALE、SSPRK(4,3) 和保持物理单元均值的模态滤波。圆柱侧面允许环境卷吸。全场统计文件记录原网格路径、哈希和单元重排。
 
+组间 LDG 黏性 trace 由所属组计算后供邻组复用。面数据就绪时立即修正，等待期间仅暂存待修正单元的残差，收尾时从只读 RK 输入重插值两侧状态。默认每个 OpenMP 批次处理 8 个相邻组，可用 `--group-packet` 调整。用现有检查点和同目录的网格测量单步耗时可运行 `python -m case.round_jet_les.benchmark_interfaces <checkpoint.pt> --threads 8`。
+
 下游可选 `--outlet nscbc-3d`。亚声速出流点用两个物理切向的无黏输运项修正入射声波，横向项权重为 `0.25(1-|M_n|)`。环境压力松弛采用系数 0.25，长度尺度为域长。局部回流点使用原有的远场特征状态，从静止环境取得入射信息，由域内确定出射信息。下游的回流点跳过三维修正。修正使用预计算的曲网格度量和 FR 面提升系数。原 `--outlet nscbc` 可以用于一维声学修正对照。
 
 `--outlet nscbc-3d-open` 同时在下游使用上述处理，并在所有 `ambient` 面使用三维特征边界。侧面的局部亚声速回流仍将入射熵和两条剪切波的法向振幅置零。使用每个曲面 Gauss 点的外法向判断出流或回流，保留 `inlet` 上的喷口条件。该模式适用于 `native-hex-p3`。边界模式是检查点配置的一部分，切换模式时应保留旧的检查点并在独立输出路径续算。
@@ -175,7 +244,7 @@ bash case/round_jet_les/run.sh --outlet nscbc-3d-ambient --initial-flow rest \
 OMP_PROC_BIND=close OMP_PLACES='{0},{2},{4},{6},{8},{10},{12},{14}' \
   taskset -c 0,2,4,6,8,10,12,14 python -u -m case.round_jet_les \
   --hex-mesh results/round_jet_les/sp3_cylindrical_40d/mesh.msh \
-  --backend native-hex-p3 --outlet nscbc-3d --p 3 --cfl 1.6 --threads 8 --group-packet 2 \
+  --backend native-hex-p3 --outlet nscbc-3d --p 3 --cfl 1.6 --threads 8 \
   --time 1000000 --sample-from-step 100000 --max-steps 200000 \
   --sample-interval .02 --sample-max-steps 100 --checkpoint-every 1000 \
   --full-field-statistics --output results/round_jet_les/sp3_cylindrical_40d_nscbc_3d
